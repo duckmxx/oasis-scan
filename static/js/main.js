@@ -73,63 +73,6 @@ function filterCVETable() {
   });
 }
 
-/* --- Chat input --- */
-const chatInput = document.getElementById('chat-input');
-if (chatInput) {
-  chatInput.addEventListener('keydown', e => {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendAdvisorMessage(); }
-  });
-}
-document.getElementById('chat-send-btn')?.addEventListener('click', sendAdvisorMessage);
-
-function sendAdvisorMessage() {
-  const input = document.getElementById('chat-input');
-  const text = input?.value.trim();
-  if (!text) return;
-  appendChatMessage('user', text);
-  input.value = '';
-  showTypingIndicator();
-}
-
-function appendChatMessage(role, text) {
-  const feed = document.getElementById('chat-messages');
-  if (!feed) return;
-  const avatar = role === 'system' ? '🛡' : '👤';
-  const label  = role === 'system' ? 'Oasis AI' : 'You';
-  const msg = document.createElement('div');
-  msg.className = `msg ${role}`;
-  msg.innerHTML = `
-    <div class="msg-avatar">${avatar}</div>
-    <div class="msg-body">
-      <div class="msg-role">${label}</div>
-      <div class="msg-text">${escapeHtml(text)}</div>
-    </div>`;
-  feed.appendChild(msg);
-  feed.scrollTop = feed.scrollHeight;
-}
-
-function showTypingIndicator() {
-  const feed = document.getElementById('chat-messages');
-  if (!feed) return;
-  const el = document.createElement('div');
-  el.className = 'msg system';
-  el.id = 'typing-indicator';
-  el.innerHTML = `
-    <div class="msg-avatar">🛡</div>
-    <div class="msg-body">
-      <div class="msg-role">Oasis AI</div>
-      <div class="typing-indicator">
-        <div class="typing-dot"></div><div class="typing-dot"></div><div class="typing-dot"></div>
-      </div>
-    </div>`;
-  feed.appendChild(el);
-  feed.scrollTop = feed.scrollHeight;
-}
-
-function removeTypingIndicator() {
-  document.getElementById('typing-indicator')?.remove();
-}
-
 /* --- Scan --- */
 document.getElementById('scan-btn')?.addEventListener('click', startScan);
 
@@ -458,42 +401,10 @@ function populateIntegrity(data) {
   }
 }
 
-/* --- Populate dashboard (system specs, apps) --- */
+/* --- Populate dashboard (stat cards + apps) --- */
 
 function populateDashboard(r) {
-  const os   = r.os            ?? {};
-  const mem  = r.memory?.summary ?? {};
-  const cpu  = r.cpu?.summary  ?? {};
-  const pkgs = r.packages      ?? {};
-  const svcs = r.services      ?? {};
-
-  // System spec cards
-  setText('spec-os',        os.pretty_name ?? '—');
-  setText('spec-os-ver',    `${os.id ?? ''} ${os.version_id ?? ''}`.trim() || '—');
-  setText('spec-kernel',    os.release ?? '—');
-  setText('spec-arch',      os.machine  ?? '—');
-  setText('spec-cpu',       cpu.model_name ?? '—');
-  setText('spec-cpu-cores', `${cpu.logical_cpus ?? '?'} logical @ ${parseFloat(cpu.cpu_mhz ?? 0).toFixed(0)} MHz`);
-  setText('spec-host',      os.hostname ?? '—');
-  setText('spec-uptime',    `${svcs.running?.length ?? 0} services running`);
-
-  const memTotal = mem.total_bytes     ?? 0;
-  const memAvail = mem.available_bytes ?? 0;
-  const memUsed  = memTotal - memAvail;
-  setText('spec-mem',        humanBytes(memTotal));
-  setText('spec-mem-detail', `${humanBytes(memUsed)} used · ${humanBytes(memAvail)} free`);
-  setBar('mem-usage-bar', memTotal ? memUsed / memTotal : 0,
-    memUsed / memTotal > 0.9 ? 'crit' : memUsed / memTotal > 0.7 ? 'warn' : '');
-
-  // Disk (df -hT: Filesystem Type Size Used Avail Use% MountPoint)
-  const dfLine = (r.filesystems?.df ?? '').split('\n').find(l => /^\//.test(l));
-  if (dfLine) {
-    const cols = dfLine.split(/\s+/);
-    setText('spec-disk',        cols[2] ?? '—');
-    setText('spec-disk-detail', `${cols[3] ?? '?'} used · ${cols[4] ?? '?'} avail (${cols[5] ?? '?'})`);
-    const pct = parseInt(cols[5] ?? '0');
-    setBar('disk-usage-bar', pct / 100, pct > 85 ? 'crit' : pct > 70 ? 'warn' : '');
-  }
+  const pkgs = r.packages ?? {};
 
   // Stat cards — CVEs shown as "…" until analysis finishes
   setText('stat-apps',     pkgs.count ?? '—');
@@ -636,34 +547,6 @@ function populateCVEs(cves, counts) {
     }
   }
 
-  // Advisor CVE sidebar
-  const advisorList = document.getElementById('advisor-cve-list');
-  if (advisorList) {
-    if (cves.length === 0) {
-      advisorList.innerHTML = `<li style="padding:16px;color:var(--text-muted);font-size:12px">
-        No CVEs found.</li>`;
-    } else {
-      advisorList.innerHTML = cves.slice(0, 40).map(c => `
-        <li class="advisor-cve-item"
-            data-cve="${escapeHtml(c.id)}"
-            data-pkg="${escapeHtml(c.package)}"
-            data-summary="${escapeHtml(c.summary)}">
-          <div>
-            <div class="advisor-cve-id">${escapeHtml(c.id)}</div>
-            <div class="advisor-cve-pkg">${escapeHtml(c.package)}</div>
-          </div>
-          <span class="badge badge-${c.severity}">${c.severity}</span>
-        </li>`).join('');
-
-      document.querySelectorAll('.advisor-cve-item').forEach(item => {
-        item.addEventListener('click', () => {
-          document.querySelectorAll('.advisor-cve-item').forEach(i => i.classList.remove('selected'));
-          item.classList.add('selected');
-        });
-      });
-    }
-  }
-
   // Flag vulnerable packages in the app grid
   if (cves.length > 0) {
     const vulnPkgs = new Map();   // pkgName → highest severity
@@ -692,21 +575,6 @@ function populateCVEs(cves, counts) {
 function setText(id, val) {
   const el = document.getElementById(id);
   if (el) el.textContent = val;
-}
-
-function setBar(id, ratio, cls = '') {
-  const el = document.getElementById(id);
-  if (!el) return;
-  el.style.width = Math.min(100, Math.round(ratio * 100)) + '%';
-  el.className = 'usage-fill' + (cls ? ' ' + cls : '');
-}
-
-function humanBytes(n) {
-  if (!n) return '?';
-  const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
-  let i = 0;
-  while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
-  return n.toFixed(1) + ' ' + units[i];
 }
 
 function escapeHtml(str) {

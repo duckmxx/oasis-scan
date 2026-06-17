@@ -41,13 +41,6 @@
       </li>
     </ul>
 
-    <p class="sidebar-section-label">AI</p>
-    <ul class="sidebar-nav">
-      <li class="nav-item" data-section="section-advisor">
-        <span class="nav-icon">✦</span> Patch Advisor
-      </li>
-    </ul>
-
     <p class="sidebar-section-label">System</p>
     <ul class="sidebar-nav">
       <li class="nav-item" data-section="section-devices">
@@ -56,9 +49,6 @@
       </li>
       <li class="nav-item" data-section="section-history">
         <span class="nav-icon">↺</span> Scan History
-      </li>
-      <li class="nav-item" data-section="section-settings">
-        <span class="nav-icon">⚙</span> Settings
       </li>
     </ul>
 
@@ -86,7 +76,6 @@
         <div class="status-dot idle" id="status-dot"></div>
         <span id="status-label">Idle</span>
       </div>
-      <button class="btn btn-ghost btn-sm" id="export-btn">↓ Export</button>
       <button class="btn btn-primary" id="scan-btn">▶ Run Scan</button>
     </div>
   </header>
@@ -125,80 +114,6 @@
         </div>
       </div>
 
-      <!-- OS / Hardware specs -->
-      <div class="panel">
-        <div class="panel-header">
-          <div class="panel-title"><span class="icon">⊞</span> System Specifications</div>
-        </div>
-        <div class="panel-body">
-          <div class="spec-grid" id="spec-grid">
-
-            <div class="spec-card">
-              <div class="spec-icon">🖥</div>
-              <div class="spec-info">
-                <div class="spec-name">Operating System</div>
-                <div class="spec-val" id="spec-os">—</div>
-                <div class="spec-detail" id="spec-os-ver">—</div>
-              </div>
-            </div>
-
-            <div class="spec-card">
-              <div class="spec-icon">⚙</div>
-              <div class="spec-info">
-                <div class="spec-name">Kernel</div>
-                <div class="spec-val" id="spec-kernel">—</div>
-                <div class="spec-detail" id="spec-arch">—</div>
-              </div>
-            </div>
-
-            <div class="spec-card">
-              <div class="spec-icon">◎</div>
-              <div class="spec-info">
-                <div class="spec-name">CPU</div>
-                <div class="spec-val" id="spec-cpu">—</div>
-                <div class="spec-detail" id="spec-cpu-cores">—</div>
-                <div class="usage-bar">
-                  <div class="usage-fill" id="cpu-usage-bar" style="width:0%"></div>
-                </div>
-              </div>
-            </div>
-
-            <div class="spec-card">
-              <div class="spec-icon">▦</div>
-              <div class="spec-info">
-                <div class="spec-name">Memory</div>
-                <div class="spec-val" id="spec-mem">—</div>
-                <div class="spec-detail" id="spec-mem-detail">—</div>
-                <div class="usage-bar">
-                  <div class="usage-fill" id="mem-usage-bar" style="width:0%"></div>
-                </div>
-              </div>
-            </div>
-
-            <div class="spec-card">
-              <div class="spec-icon">◫</div>
-              <div class="spec-info">
-                <div class="spec-name">Disk</div>
-                <div class="spec-val" id="spec-disk">—</div>
-                <div class="spec-detail" id="spec-disk-detail">—</div>
-                <div class="usage-bar">
-                  <div class="usage-fill" id="disk-usage-bar" style="width:0%"></div>
-                </div>
-              </div>
-            </div>
-
-            <div class="spec-card">
-              <div class="spec-icon">⬡</div>
-              <div class="spec-info">
-                <div class="spec-name">Hostname / User</div>
-                <div class="spec-val" id="spec-host">—</div>
-                <div class="spec-detail" id="spec-uptime">Uptime: —</div>
-              </div>
-            </div>
-
-          </div>
-        </div>
-      </div>
     </section>
 
     <!-- ===================================================
@@ -346,65 +261,6 @@
     </section>
 
     <!-- ===================================================
-         SECTION: AI PATCH ADVISOR
-         =================================================== -->
-    <section class="page-section hidden" id="section-advisor">
-      <div class="panel">
-        <div class="panel-header">
-          <div class="panel-title"><span class="icon">✦</span> AI Patch Advisor</div>
-          <span class="text-muted" style="font-size:12px">Select a CVE → get remediation steps</span>
-        </div>
-        <div class="advisor-layout">
-
-          <!-- Chat pane -->
-          <div class="advisor-chat">
-            <div class="chat-messages" id="chat-messages">
-
-              <!-- Welcome message -->
-              <div class="msg system">
-                <div class="msg-avatar">🛡</div>
-                <div class="msg-body">
-                  <div class="msg-role">Oasis AI</div>
-                  <div class="msg-text">
-                    Hello! I'm your AI patch advisor. Select a CVE from the list on the right
-                    and I'll walk you through the exact steps to remediate it on your system —
-                    including package commands, config changes, and workarounds where a patch
-                    isn't yet available.
-                    <br/><br/>
-                    You can also ask me anything directly, e.g.<br/>
-                    <code>How do I patch CVE-2024-1234 on Arch Linux?</code>
-                  </div>
-                </div>
-              </div>
-
-            </div>
-            <div class="chat-input-area">
-              <textarea
-                id="chat-input"
-                class="chat-input"
-                rows="1"
-                placeholder="Ask about a CVE or paste a CVE ID… (Enter to send)"
-              ></textarea>
-              <button class="btn btn-primary" id="chat-send-btn">Send</button>
-            </div>
-          </div>
-
-          <!-- CVE context sidebar -->
-          <div class="advisor-sidebar">
-            <div class="advisor-sidebar-header">CVEs from last scan</div>
-            <ul class="advisor-cve-list" id="advisor-cve-list">
-              <!-- Populated by JS after scan -->
-              <li style="padding:16px; color:var(--text-muted); font-size:12px;">
-                No CVEs loaded — run a scan first.
-              </li>
-            </ul>
-          </div>
-
-        </div>
-      </div>
-    </section>
-
-    <!-- ===================================================
          SECTION: APPLICATIONS
          =================================================== -->
     <section class="page-section hidden" id="section-apps">
@@ -521,23 +377,6 @@
           <div class="empty-state">
             <div class="empty-icon">↺</div>
             <div>Scan history will appear here.</div>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <!-- ===================================================
-         SECTION: SETTINGS  (stub)
-         =================================================== -->
-    <section class="page-section hidden" id="section-settings">
-      <div class="panel">
-        <div class="panel-header">
-          <div class="panel-title"><span class="icon">⚙</span> Settings</div>
-        </div>
-        <div class="panel-body">
-          <div class="empty-state">
-            <div class="empty-icon">⚙</div>
-            <div>Settings panel coming soon.</div>
           </div>
         </div>
       </div>
