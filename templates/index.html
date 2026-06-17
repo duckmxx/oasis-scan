@@ -536,14 +536,7 @@
     import { getAuth, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/11.8.1/firebase-auth.js";
     import { getFirestore, collection, addDoc, getDocs, orderBy, query, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.8.1/firebase-firestore.js";
 
-    const firebaseConfig = {
-      apiKey: "AIzaSyBr8FSPpcVtuinCm-iWKicEl_CP3JTP80o",
-      authDomain: "oasis-scanner-c988d.firebaseapp.com",
-      projectId: "oasis-scanner-c988d",
-      storageBucket: "oasis-scanner-c988d.firebasestorage.app",
-      messagingSenderId: "661728874468",
-      appId: "1:661728874468:web:961e64b143b60f6dc881f1"
-    };
+    const firebaseConfig = {{ firebase_json | safe }};
 
     const app = initializeApp(firebaseConfig);
     const auth = getAuth(app);
@@ -713,6 +706,30 @@
     function escHtml(s) {
       return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
     }
+
+    // Load packages from the most recent scan that has them (used by Applications tab)
+    window.__loadPackages = async function() {
+      const user = auth.currentUser;
+      if (!user) return null;
+      try {
+        const q    = query(collection(db, 'users', user.uid, 'scans'), orderBy('createdAt', 'desc'));
+        const snap = await getDocs(q);
+        for (const doc of snap.docs) {
+          const d = doc.data();
+          if (Array.isArray(d.packages) && d.packages.length > 0) {
+            return {
+              packages: d.packages,
+              foreign:  d.foreign  ?? [],
+              count:    d.pkg_count ?? d.packages.length,
+              manager:  d.pkg_manager ?? '',
+            };
+          }
+        }
+      } catch (e) {
+        console.error('loadPackages failed', e);
+      }
+      return null;
+    };
 
     // Expose all Firestore devices grouped by hostname (used by topology map)
     window.__getFirestoreDevices = async function() {

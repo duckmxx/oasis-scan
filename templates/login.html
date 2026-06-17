@@ -99,14 +99,7 @@
     import { initializeApp } from "https://www.gstatic.com/firebasejs/11.8.1/firebase-app.js";
     import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, GoogleAuthProvider, signInWithPopup, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.8.1/firebase-auth.js";
 
-    const firebaseConfig = {
-      apiKey: "AIzaSyBr8FSPpcVtuinCm-iWKicEl_CP3JTP80o",
-      authDomain: "oasis-scanner-c988d.firebaseapp.com",
-      projectId: "oasis-scanner-c988d",
-      storageBucket: "oasis-scanner-c988d.firebasestorage.app",
-      messagingSenderId: "661728874468",
-      appId: "1:661728874468:web:961e64b143b60f6dc881f1"
-    };
+    const firebaseConfig = {{ firebase_json | safe }};
 
     const app = initializeApp(firebaseConfig);
     const auth = getAuth(app);

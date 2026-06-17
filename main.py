@@ -1,19 +1,33 @@
+import json
 import flask
 from scanner import scan as run_scan
 from cve_lookup import lookup_cves
 from integrity_check import run_integrity
+from config import (
+    FIREBASE_API_KEY, FIREBASE_AUTH_DOMAIN, FIREBASE_PROJECT,
+    FIREBASE_STORAGE_BUCKET, FIREBASE_MESSAGING_ID, FIREBASE_APP_ID,
+)
 
 app = flask.Flask(__name__, template_folder="templates", static_folder="static")
+
+_FIREBASE_JSON = json.dumps({
+    "apiKey":            FIREBASE_API_KEY,
+    "authDomain":        FIREBASE_AUTH_DOMAIN,
+    "projectId":         FIREBASE_PROJECT,
+    "storageBucket":     FIREBASE_STORAGE_BUCKET,
+    "messagingSenderId": FIREBASE_MESSAGING_ID,
+    "appId":             FIREBASE_APP_ID,
+})
 
 
 @app.route("/")
 def dashboard():
-    return flask.render_template("index.html")
+    return flask.render_template("index.html", firebase_json=_FIREBASE_JSON)
 
 
 @app.route("/login")
 def login():
-    return flask.render_template("login.html")
+    return flask.render_template("login.html", firebase_json=_FIREBASE_JSON)
 
 
 @app.route("/api/status")

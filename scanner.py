@@ -8,8 +8,7 @@ import urllib.request
 import urllib.error
 from datetime import datetime, timezone
 
-FIREBASE_API_KEY = "AIzaSyBr8FSPpcVtuinCm-iWKicEl_CP3JTP80o"
-FIREBASE_PROJECT  = "oasis-scanner-c988d"
+from config import FIREBASE_API_KEY, FIREBASE_PROJECT
 
 ARCH_BASED = {"arch", "artix", "manjaro", "endeavouros", "cachyos", "garuda", "arcolinux", "parabola"}
 DEBIAN_BASED = {"debian", "ubuntu", "linuxmint", "pop", "kali", "raspbian"}

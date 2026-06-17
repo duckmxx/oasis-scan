@@ -18,6 +18,13 @@ document.querySelectorAll('.nav-item[data-section]').forEach(item => {
     const el = document.getElementById(target);
     if (el) { el.classList.remove('hidden'); el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
     if (target === 'section-topology' && _lastReport) runTopologyBuild();
+    if (target === 'section-apps' && !_lastReport) {
+      if (typeof window.__loadPackages === 'function') {
+        window.__loadPackages().then(data => {
+          if (data) _populateApps(data.packages, data.foreign, data.count, data.manager, ' · from last scan');
+        });
+      }
+    }
     const label = item.textContent.replace(/[⊞⚠⊡⊟⬡✦↺⚙]/g, '').trim();
     const titleEl = document.getElementById('topbar-section-label');
     if (titleEl) titleEl.textContent = label;
@@ -208,6 +215,10 @@ async function runCVEAnalysis(report) {
         mem_available:    mem.available_bytes     ?? 0,
         pkg_count:        r.packages?.count       ?? 0,
         pkg_manager:      r.packages?.manager     ?? '',
+        packages: (r.packages?.packages ?? [])
+                    .slice(0, 1000)
+                    .map(p => ({ name: p.name, version: p.version ?? '' })),
+        foreign:  (r.packages?.foreign  ?? []).slice(0, 500),
         services_running: r.services?.running?.length ?? 0,
         suid_count:       r.suid_files?.length    ?? 0,
         distro_family:    r.distro_family         ?? '',
@@ -442,25 +453,30 @@ function populateDashboard(r) {
   setText('stat-other',    '…');
 
   // Applications grid
+  if (pkgs.packages) {
+    _populateApps(pkgs.packages, pkgs.foreign ?? [], pkgs.count, pkgs.manager, '');
+  }
+}
+
+function _populateApps(pkgList, foreignList, totalCount, manager, suffix) {
   const grid     = document.getElementById('app-grid');
   const appCount = document.getElementById('apps-count');
-  if (grid && pkgs.packages) {
-    const shown   = pkgs.packages.slice(0, 80);
-    const foreign = new Set(pkgs.foreign ?? []);
-    if (appCount) appCount.textContent = `${pkgs.count} packages via ${pkgs.manager}`;
-    grid.innerHTML = shown.map(p => `
-      <div class="app-card" data-pkg="${escapeHtml(p.name)}">
-        <div class="app-icon">📦</div>
-        <div class="app-info">
-          <div class="app-name">${escapeHtml(p.name)}</div>
-          <div class="app-version">${escapeHtml(p.version ?? '')}</div>
-        </div>
-        ${foreign.has(p.name) ? '<div class="app-vuln-flag" title="AUR / foreign"></div>' : ''}
-      </div>`).join('');
-    if (pkgs.packages.length > 80) {
-      grid.innerHTML += `<div class="app-card" style="justify-content:center;color:var(--text-muted)">
-        +${pkgs.packages.length - 80} more…</div>`;
-    }
+  if (!grid || !pkgList) return;
+  const foreign = new Set(foreignList);
+  const shown   = pkgList.slice(0, 80);
+  if (appCount) appCount.textContent = `${totalCount} packages via ${manager}${suffix}`;
+  grid.innerHTML = shown.map(p => `
+    <div class="app-card" data-pkg="${escapeHtml(p.name)}">
+      <div class="app-icon">📦</div>
+      <div class="app-info">
+        <div class="app-name">${escapeHtml(p.name)}</div>
+        <div class="app-version">${escapeHtml(p.version ?? '')}</div>
+      </div>
+      ${foreign.has(p.name) ? '<div class="app-vuln-flag" title="AUR / foreign"></div>' : ''}
+    </div>`).join('');
+  if (pkgList.length > 80) {
+    grid.innerHTML += `<div class="app-card" style="justify-content:center;color:var(--text-muted)">
+      +${pkgList.length - 80} more…</div>`;
   }
 }
 
