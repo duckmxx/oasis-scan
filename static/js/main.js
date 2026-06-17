@@ -149,8 +149,9 @@ async function startScan() {
   if (overlay) overlay.style.display = 'none';
   if (scanBtn) scanBtn.disabled = false;
 
-  // CVE analysis runs in the background; status bar stays "scanning"
+  // Both checks run in parallel after the overlay closes
   runCVEAnalysis(_lastReport);
+  runIntegrityCheck(_lastReport);
 }
 
 /* --- CVE Analysis (runs after scan overlay closes) --- */
@@ -221,6 +222,170 @@ async function runCVEAnalysis(report) {
           <div class="empty-icon">⚠</div>
           <div>CVE check failed: ${escapeHtml(err.message)}</div>
         </div></td></tr>`;
+    }
+  }
+}
+
+/* --- Integrity Check --- */
+
+async function runIntegrityCheck(report) {
+  if (!report) return;
+
+  // Show loading state in all three integrity tables
+  ['integrity-file-tbody', 'integrity-mal-tbody', 'integrity-bin-tbody'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.innerHTML = `<tr><td colspan="5">
+      <div class="empty-state">
+        <div class="scan-spinner" style="width:24px;height:24px;margin:0 auto 10px"></div>
+        <div style="color:var(--text-muted)">Checking…</div>
+      </div></td></tr>`;
+  });
+
+  try {
+    const res  = await fetch('/api/integrity', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify(report),
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || 'Integrity check failed');
+    populateIntegrity(data);
+  } catch (err) {
+    ['integrity-file-tbody', 'integrity-mal-tbody', 'integrity-bin-tbody'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.innerHTML = `<tr><td colspan="5">
+        <div class="empty-state" style="color:var(--sev-critical)">
+          Failed: ${escapeHtml(err.message)}</div></td></tr>`;
+    });
+  }
+}
+
+function populateIntegrity(data) {
+  const sum   = data.summary ?? {};
+  const files = data.file_integrity  ?? [];
+  const mal   = data.malicious       ?? [];
+  const bins  = data.modified_bins   ?? [];
+
+  // Top banner
+  const banner = document.getElementById('integrity-banner');
+  const icon   = document.getElementById('integrity-banner-icon');
+  const title  = document.getElementById('integrity-banner-title');
+  const sub    = document.getElementById('integrity-banner-sub');
+
+  if (sum.clean) {
+    if (banner) banner.className = 'integrity-banner integrity-banner-ok';
+    if (icon)   icon.textContent  = '✓';
+    if (title)  title.textContent = 'All checks passed — no integrity issues found';
+    if (sub)    sub.textContent   = 'Package files match their checksums. No known malicious packages detected.';
+  } else {
+    if (banner) banner.className = 'integrity-banner integrity-banner-warn';
+    if (icon)   icon.textContent  = '⚠';
+    const parts = [];
+    if (sum.file_issues        > 0) parts.push(`${sum.file_issues} file integrity issue${sum.file_issues !== 1 ? 's' : ''}`);
+    if (sum.malicious_pkgs     > 0) parts.push(`${sum.malicious_pkgs} known malicious package${sum.malicious_pkgs !== 1 ? 's' : ''}`);
+    if (sum.modified_bin_files > 0) parts.push(`${sum.modified_bin_files} recently modified system binary${sum.modified_bin_files !== 1 ? 's' : ''}`);
+    if (title)  title.textContent = 'Issues detected: ' + parts.join(' · ');
+    if (sub)    sub.textContent   = 'Review the tables below for details.';
+  }
+
+  // Nav badge (show if any real issue found)
+  const navBadge = document.getElementById('nav-integrity-badge');
+  const issueCount = sum.file_issues + sum.malicious_pkgs;
+  if (navBadge) {
+    navBadge.textContent = issueCount || (sum.modified_bin_files > 0 ? '!' : '');
+    navBadge.classList.toggle('hidden', issueCount === 0 && sum.modified_bin_files === 0);
+    navBadge.style.background = issueCount > 0 ? 'var(--sev-critical)' : 'var(--sev-medium)';
+  }
+
+  // ── File integrity table ─────────────────────────────────────────────────
+  const fileTbody = document.getElementById('integrity-file-tbody');
+  const fileCount = document.getElementById('integrity-file-count');
+  if (fileCount) fileCount.textContent = files.length === 0
+    ? '✓ All files intact' : `${files.length} issue${files.length !== 1 ? 's' : ''} found`;
+
+  if (fileTbody) {
+    if (files.length === 0) {
+      fileTbody.innerHTML = `<tr><td colspan="4">
+        <div class="empty-state">
+          <div class="empty-icon" style="color:var(--sev-low)">✓</div>
+          <div>All installed package files match their checksums.</div>
+        </div></td></tr>`;
+    } else {
+      fileTbody.innerHTML = files.map(f => {
+        const cls = f.issue === 'checksum_mismatch' ? 'cvss-critical'
+                  : f.issue === 'missing_file'      ? 'cvss-high'
+                  : 'cvss-medium';
+        const label = {
+          checksum_mismatch:  '⚠ Checksum',
+          size_mismatch:      '⚠ Size',
+          missing_file:       '✗ Missing',
+          permission_changed: '~ Permissions',
+          mtime_changed:      '~ Modified',
+          altered:            '⚠ Altered',
+        }[f.issue] ?? f.issue;
+        return `<tr>
+          <td class="mono" style="font-size:11px">${escapeHtml(f.package)}</td>
+          <td class="mono" style="font-size:11px">${escapeHtml(f.file)}</td>
+          <td><span class="${cls}" style="font-weight:600">${label}</span></td>
+          <td style="font-size:11px;color:var(--text-secondary)">${escapeHtml(f.detail)}</td>
+        </tr>`;
+      }).join('');
+    }
+  }
+
+  // ── Malicious packages table ─────────────────────────────────────────────
+  const malTbody = document.getElementById('integrity-mal-tbody');
+  const malCount = document.getElementById('integrity-mal-count');
+  if (malCount) malCount.textContent = mal.length === 0
+    ? '✓ No known malicious packages' : `${mal.length} detected`;
+
+  if (malTbody) {
+    if (mal.length === 0) {
+      malTbody.innerHTML = `<tr><td colspan="5">
+        <div class="empty-state">
+          <div class="empty-icon" style="color:var(--sev-low)">✓</div>
+          <div>No packages matched the OSSF malicious-packages database.</div>
+        </div></td></tr>`;
+    } else {
+      malTbody.innerHTML = mal.map(m => `
+        <tr>
+          <td><a class="cve-id" href="${escapeHtml(m.url)}" target="_blank" rel="noopener">${escapeHtml(m.id)}</a></td>
+          <td class="mono" style="font-size:11px">${escapeHtml(m.package)}</td>
+          <td class="mono" style="font-size:11px">${escapeHtml(m.version)}</td>
+          <td style="font-size:11px;color:var(--sev-critical)">${escapeHtml(m.summary)}</td>
+          <td><a href="${escapeHtml(m.url)}" target="_blank" rel="noopener" class="btn btn-ghost btn-sm">Details</a></td>
+        </tr>`).join('');
+    }
+  }
+
+  // ── Modified binaries table ──────────────────────────────────────────────
+  const binTbody = document.getElementById('integrity-bin-tbody');
+  const binCount = document.getElementById('integrity-bin-count');
+  if (binCount) binCount.textContent = bins.length === 0
+    ? '✓ No recent modifications' : `${bins.length} file${bins.length !== 1 ? 's' : ''} modified in last 7 days`;
+
+  if (binTbody) {
+    if (bins.length === 0) {
+      binTbody.innerHTML = `<tr><td colspan="4">
+        <div class="empty-state">
+          <div class="empty-icon" style="color:var(--sev-low)">✓</div>
+          <div>No system binaries were modified in the last 7 days.</div>
+        </div></td></tr>`;
+    } else {
+      binTbody.innerHTML = bins.map(b => {
+        const ageLabel = b.age_hours < 24
+          ? `${b.age_hours}h ago`
+          : `${Math.floor(b.age_hours / 24)}d ago`;
+        const ageCls = b.age_hours < 24 ? 'cvss-critical'
+                     : b.age_hours < 72 ? 'cvss-high'
+                     : 'cvss-medium';
+        return `<tr>
+          <td class="mono" style="font-size:11px">${escapeHtml(b.path)}</td>
+          <td class="mono" style="font-size:11px">${escapeHtml(b.package)}</td>
+          <td style="font-size:11px;color:var(--text-secondary)">${escapeHtml(new Date(b.modified).toLocaleString())}</td>
+          <td class="${ageCls}" style="font-weight:600">${ageLabel}</td>
+        </tr>`;
+      }).join('');
     }
   }
 }

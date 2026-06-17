@@ -1,6 +1,7 @@
 import flask
 from scanner import scan as run_scan
 from cve_lookup import lookup_cves
+from integrity_check import run_integrity
 
 app = flask.Flask(__name__, template_folder="templates", static_folder="static")
 
@@ -39,6 +40,16 @@ def api_analyze():
             s = c.get("severity", "unknown")
             counts[s] = counts.get(s, 0) + 1
         return flask.jsonify({"ok": True, "cves": cves, "counts": counts})
+    except Exception as e:
+        return flask.jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/integrity", methods=["POST"])
+def api_integrity():
+    try:
+        report = flask.request.get_json(force=True) or {}
+        result = run_integrity(report)
+        return flask.jsonify({"ok": True, **result})
     except Exception as e:
         return flask.jsonify({"ok": False, "error": str(e)}), 500
 

@@ -26,8 +26,11 @@
       </li>
       <li class="nav-item" data-section="section-cves">
         <span class="nav-icon">⚠</span> CVEs
-        <!-- badge populated by JS: data-cve-count -->
         <span class="nav-badge hidden" id="nav-cve-badge">0</span>
+      </li>
+      <li class="nav-item" data-section="section-integrity">
+        <span class="nav-icon">🔒</span> Integrity
+        <span class="nav-badge hidden" id="nav-integrity-badge">!</span>
       </li>
       <li class="nav-item" data-section="section-apps">
         <span class="nav-icon">⊡</span> Applications
@@ -192,6 +195,107 @@
           </div>
         </div>
       </div>
+    </section>
+
+    <!-- ===================================================
+         SECTION: INTEGRITY
+         =================================================== -->
+    <section class="page-section hidden" id="section-integrity">
+
+      <!-- Summary banner -->
+      <div class="integrity-banner" id="integrity-banner">
+        <div class="integrity-banner-icon" id="integrity-banner-icon">⬡</div>
+        <div>
+          <div class="integrity-banner-title" id="integrity-banner-title">Run a scan to check package integrity</div>
+          <div class="integrity-banner-sub"   id="integrity-banner-sub">Verifies installed package files, detects tampered binaries, and checks for known malicious packages.</div>
+        </div>
+      </div>
+
+      <!-- File integrity -->
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title"><span class="icon">🔒</span> File Integrity</div>
+          <span class="text-muted" style="font-size:12px" id="integrity-file-count">—</span>
+        </div>
+        <div class="panel-body no-pad">
+          <table class="cve-table">
+            <thead>
+              <tr>
+                <th>Package</th>
+                <th>File</th>
+                <th>Issue</th>
+                <th>Detail</th>
+              </tr>
+            </thead>
+            <tbody id="integrity-file-tbody">
+              <tr><td colspan="4">
+                <div class="empty-state">
+                  <div class="empty-icon">🔒</div>
+                  <div>Run a scan to verify package file integrity.</div>
+                </div>
+              </td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Malicious packages -->
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title"><span class="icon">☠</span> Known Malicious Packages</div>
+          <span class="text-muted" style="font-size:12px" id="integrity-mal-count">—</span>
+        </div>
+        <div class="panel-body no-pad">
+          <table class="cve-table">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Package</th>
+                <th>Version</th>
+                <th>Summary</th>
+                <th>Link</th>
+              </tr>
+            </thead>
+            <tbody id="integrity-mal-tbody">
+              <tr><td colspan="5">
+                <div class="empty-state">
+                  <div class="empty-icon">☠</div>
+                  <div>Run a scan to check for malicious packages.</div>
+                </div>
+              </td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Recently modified binaries -->
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title"><span class="icon">⏱</span> Recently Modified System Binaries</div>
+          <span class="text-muted" style="font-size:12px" id="integrity-bin-count">—</span>
+        </div>
+        <div class="panel-body no-pad">
+          <table class="cve-table">
+            <thead>
+              <tr>
+                <th>File</th>
+                <th>Package</th>
+                <th>Modified</th>
+                <th>Age</th>
+              </tr>
+            </thead>
+            <tbody id="integrity-bin-tbody">
+              <tr><td colspan="4">
+                <div class="empty-state">
+                  <div class="empty-icon">⏱</div>
+                  <div>Run a scan to detect recently modified binaries.</div>
+                </div>
+              </td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
     </section>
 
     <!-- ===================================================

@@ -505,6 +505,50 @@ ul { list-style: none; }
 .usage-fill.crit  { background: var(--sev-critical); }
 
 /* =========================================================
+   Section: Integrity
+   ========================================================= */
+
+.integrity-banner {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 18px 22px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border);
+  background: var(--bg-panel);
+}
+
+.integrity-banner-ok   { border-color: rgba(39,201,63,0.35);  background: rgba(39,201,63,0.06); }
+.integrity-banner-warn { border-color: rgba(245,166,35,0.4);  background: rgba(245,166,35,0.06); }
+
+.integrity-banner-icon {
+  font-size: 28px;
+  flex-shrink: 0;
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-hover);
+}
+
+.integrity-banner-ok   .integrity-banner-icon { color: var(--sev-low); }
+.integrity-banner-warn .integrity-banner-icon { color: var(--sev-medium); }
+
+.integrity-banner-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.integrity-banner-sub {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-top: 3px;
+}
+
+/* =========================================================
    Section: CVE Results
    ========================================================= */
 
