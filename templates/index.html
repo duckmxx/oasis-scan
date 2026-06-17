@@ -7,6 +7,7 @@
   <link rel="stylesheet" href="/static/css/style.css" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600;700&display=swap" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.29.2/cytoscape.min.js" defer></script>
 </head>
 <body>
 
@@ -34,6 +35,9 @@
       </li>
       <li class="nav-item" data-section="section-apps">
         <span class="nav-icon">⊡</span> Applications
+      </li>
+      <li class="nav-item" data-section="section-topology">
+        <span class="nav-icon">⬡</span> Attack Map
       </li>
     </ul>
 
@@ -422,6 +426,45 @@
     </section>
 
     <!-- ===================================================
+         SECTION: TOPOLOGY / ATTACK MAP
+         =================================================== -->
+    <section class="page-section hidden" id="section-topology">
+      <div class="panel" style="overflow:hidden">
+        <div class="panel-header">
+          <div class="panel-title"><span class="icon">⬡</span> Network Attack Map</div>
+          <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+            <div class="topo-legend-inline">
+              <span><span class="topo-dot crit"></span>Critical</span>
+              <span><span class="topo-dot high"></span>High</span>
+              <span><span class="topo-dot ok"></span>Clean</span>
+              <span><span class="topo-dot unk"></span>Unknown</span>
+              <span><span class="topo-line-sample attack"></span>Attack path</span>
+              <span><span class="topo-line-sample pivot"></span>Lateral move</span>
+            </div>
+            <button class="btn btn-ghost btn-sm" id="topo-rebuild-btn">↺ Rebuild</button>
+          </div>
+        </div>
+        <div id="topology-cy" class="topo-canvas">
+          <div class="empty-state">
+            <div class="empty-icon">⬡</div>
+            <div>Run a scan first to build the network topology.</div>
+          </div>
+        </div>
+        <div id="topo-node-info" class="topo-node-info"></div>
+      </div>
+
+      <div class="panel" id="attack-narrative-panel" style="display:none">
+        <div class="panel-header">
+          <div class="panel-title"><span class="icon">⚠</span> Hypothetical Attack Path</div>
+          <span class="text-muted" style="font-size:12px">Based on CVE data + live network topology — no AI</span>
+        </div>
+        <div class="panel-body" style="padding:20px 24px">
+          <ol class="attack-steps" id="attack-steps"></ol>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================================================
          SECTION: DEVICES
          =================================================== -->
     <section class="page-section hidden" id="section-devices">
@@ -670,6 +713,28 @@
     function escHtml(s) {
       return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
     }
+
+    // Expose all Firestore devices grouped by hostname (used by topology map)
+    window.__getFirestoreDevices = async function() {
+      const user = auth.currentUser;
+      if (!user) return [];
+      try {
+        const snap = await getDocs(collection(db, 'users', user.uid, 'scans'));
+        const map = new Map();
+        snap.forEach(doc => {
+          const d  = doc.data();
+          const h  = d.hostname || 'unknown';
+          const ts = d.createdAt?.toDate?.()?.getTime?.()
+                   ?? (d.scanned_at ? new Date(d.scanned_at).getTime() : 0);
+          if (!map.has(h) || ts > map.get(h)._ts)
+            map.set(h, { ...d, _ts: ts });
+        });
+        return [...map.values()];
+      } catch (e) {
+        console.error('getFirestoreDevices failed', e);
+        return [];
+      }
+    };
 
     // Expose save function so main.js can call it after a scan
     window.__saveScanResult = async function(result) {

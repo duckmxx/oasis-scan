@@ -239,6 +239,27 @@ def get_network_info():
     }
 
 
+def get_network_neighbors():
+    """ARP/neighbor table — devices recently seen on the local network."""
+    out, _, rc = run(["ip", "-j", "neigh", "show"])
+    if rc == 0 and out:
+        try:
+            raw = json.loads(out)
+            return [
+                {
+                    "ip":        n.get("dst", ""),
+                    "mac":       n.get("lladdr", ""),
+                    "interface": n.get("dev", ""),
+                    "state":     n.get("state", []),
+                }
+                for n in raw
+                if n.get("dst") and not n.get("dst", "").startswith("fe80")
+            ]
+        except json.JSONDecodeError:
+            pass
+    return []
+
+
 def get_services():
     if not shutil.which("systemctl"):
         return {"available": False}
@@ -411,7 +432,8 @@ def scan():
         "filesystems": get_filesystems(),
         "pci": get_pci_devices(),
         "usb": get_usb_devices(),
-        "network": get_network_info(),
+        "network":           get_network_info(),
+        "network_neighbors": get_network_neighbors(),
         "services": get_services(),
         "users": get_users(),
         "sudo": get_sudo_version(),

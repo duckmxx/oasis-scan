@@ -54,5 +54,48 @@ def api_integrity():
         return flask.jsonify({"ok": False, "error": str(e)}), 500
 
 
+@app.route("/api/topology", methods=["POST"])
+def api_topology():
+    try:
+        report = flask.request.get_json(force=True) or {}
+
+        # Parse gateway from routing table
+        gateway = None
+        routes = report.get("network", {}).get("routes") or []
+        if isinstance(routes, list):
+            for r in routes:
+                if isinstance(r, dict) and r.get("dst") == "default":
+                    gateway = r.get("gateway")
+                    break
+
+        # Parse non-loopback IPs
+        my_ips = []
+        addresses = report.get("network", {}).get("addresses") or []
+        if isinstance(addresses, list):
+            for iface in addresses:
+                if not isinstance(iface, dict):
+                    continue
+                ifname = iface.get("ifname", "")
+                if ifname.startswith("lo"):
+                    continue
+                for addr in iface.get("addr_info", []):
+                    if isinstance(addr, dict) and addr.get("family") == "inet":
+                        my_ips.append({
+                            "interface": ifname,
+                            "ip":        addr.get("local"),
+                            "prefix":    addr.get("prefixlen"),
+                        })
+
+        return flask.jsonify({
+            "ok":        True,
+            "hostname":  (report.get("os") or {}).get("hostname", ""),
+            "my_ips":    my_ips,
+            "gateway":   gateway,
+            "neighbors": report.get("network_neighbors") or [],
+        })
+    except Exception as e:
+        return flask.jsonify({"ok": False, "error": str(e)}), 500
+
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)

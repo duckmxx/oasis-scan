@@ -3,9 +3,10 @@
    ========================================================= */
 
 // Module-level refs kept so runCVEAnalysis() can update the status bar
-let _dot       = null;
-let _statusLbl = null;
+let _dot        = null;
+let _statusLbl  = null;
 let _lastReport = null;
+let _cveData    = null;   // set by runCVEAnalysis; used by topology map
 
 /* --- Nav --- */
 document.querySelectorAll('.nav-item[data-section]').forEach(item => {
@@ -16,7 +17,8 @@ document.querySelectorAll('.nav-item[data-section]').forEach(item => {
     document.querySelectorAll('.page-section').forEach(s => s.classList.add('hidden'));
     const el = document.getElementById(target);
     if (el) { el.classList.remove('hidden'); el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
-    const label = item.textContent.replace(/[⊞⚠⊡⊟✦↺⚙]/g, '').trim();
+    if (target === 'section-topology' && _lastReport) runTopologyBuild();
+    const label = item.textContent.replace(/[⊞⚠⊡⊟⬡✦↺⚙]/g, '').trim();
     const titleEl = document.getElementById('topbar-section-label');
     if (titleEl) titleEl.textContent = label;
   });
@@ -182,6 +184,12 @@ async function runCVEAnalysis(report) {
     if (!data.ok) throw new Error(data.error || 'CVE analysis failed');
 
     populateCVEs(data.cves, data.counts);
+
+    _cveData = { cves: data.cves, counts: data.counts };
+    if (document.getElementById('section-topology') &&
+        !document.getElementById('section-topology').classList.contains('hidden')) {
+      runTopologyBuild();
+    }
 
     // Save full result (system info + CVE counts) to Firestore
     if (typeof window.__saveScanResult === 'function') {
@@ -593,4 +601,409 @@ function sevColor(sev) {
   return { critical: 'var(--sev-critical)', high: 'var(--sev-high)',
            medium: 'var(--sev-medium)', low: 'var(--sev-low)' }[sev]
          ?? 'var(--text-muted)';
+}
+
+/* =========================================================
+   TOPOLOGY / ATTACK MAP
+   ========================================================= */
+
+document.getElementById('topo-rebuild-btn')?.addEventListener('click', () => {
+  if (_lastReport) runTopologyBuild();
+});
+
+async function runTopologyBuild() {
+  const container = document.getElementById('topology-cy');
+  if (!container) return;
+
+  container.innerHTML = `<div class="empty-state">
+    <div class="scan-spinner" style="width:32px;height:32px;margin:0 auto 12px"></div>
+    <div style="color:var(--text-muted)">Building topology…</div>
+  </div>`;
+
+  try {
+    const res  = await fetch('/api/topology', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify(_lastReport),
+    });
+    const topo = await res.json();
+    if (!topo.ok) throw new Error(topo.error || 'Topology failed');
+
+    let fsDevices = [];
+    if (typeof window.__getFirestoreDevices === 'function') {
+      fsDevices = await window.__getFirestoreDevices();
+    }
+
+    renderTopology(topo, _cveData, fsDevices);
+    buildAttackNarrative(topo, _cveData);
+
+  } catch (err) {
+    container.innerHTML = `<div class="empty-state">
+      <div class="empty-icon">⚠</div>
+      <div>Topology failed: ${escapeHtml(err.message)}</div>
+    </div>`;
+  }
+}
+
+const _RISK_COLOR = {
+  critical: '#ff3860',
+  high:     '#ff6b35',
+  clean:    '#27c93f',
+  unknown:  '#4a5568',
+};
+
+function _deviceRisk(d) {
+  if ((d.critical ?? 0) > 0) return 'critical';
+  if ((d.high ?? 0) > 0)     return 'high';
+  if (d.critical !== undefined) return 'clean';
+  return 'unknown';
+}
+
+function renderTopology(topo, cveData, fsDevices) {
+  const hostname = topo.hostname || 'This Device';
+  const gateway  = topo.gateway;
+  const myIps    = topo.my_ips || [];
+  const neighbors = topo.neighbors || [];
+  const myIp     = myIps[0]?.ip || '?';
+
+  const critical = cveData?.counts?.critical ?? 0;
+  const high     = cveData?.counts?.high ?? 0;
+  const riskLevel = critical > 0 ? 'critical' : high > 0 ? 'high' : (cveData ? 'clean' : 'unknown');
+  const hasNetworkCVEs = (critical + high) > 0;
+
+  const elements = [];
+
+  // Internet node
+  elements.push({ data: { id: 'internet', label: 'Internet', type: 'internet', risk: 'none' } });
+
+  // Gateway/router
+  if (gateway) {
+    elements.push({ data: { id: 'router', label: gateway, sublabel: 'Router / Gateway', type: 'router', risk: 'none' } });
+    elements.push({ data: { id: 'e-inet-router', source: 'internet', target: 'router', etype: 'wan' } });
+  }
+
+  // Current device
+  elements.push({ data: {
+    id:       'current',
+    label:    hostname,
+    sublabel: myIp,
+    type:     'current',
+    risk:     riskLevel,
+    color:    _RISK_COLOR[riskLevel],
+  }});
+  elements.push({ data: { id: 'e-gw-current', source: gateway ? 'router' : 'internet', target: 'current', etype: 'lan' } });
+
+  // ARP neighbors
+  const neighborIds = [];
+  for (const n of neighbors) {
+    if (!n.ip || n.ip === gateway) continue;
+    const nid = 'n-' + n.ip.replace(/[:.]/g, '_');
+    neighborIds.push(nid);
+
+    const known  = fsDevices.find(d => d.hostname === n.ip);
+    const nRisk  = known ? _deviceRisk(known) : 'unknown';
+
+    elements.push({ data: {
+      id:       nid,
+      label:    known ? known.hostname : n.ip,
+      sublabel: known ? n.ip : (n.mac ? n.mac.slice(-8) : ''),
+      type:     'neighbor',
+      risk:     nRisk,
+      color:    _RISK_COLOR[nRisk],
+      state:    Array.isArray(n.state) ? n.state[0] : (n.state || ''),
+    }});
+    elements.push({ data: { id: 'e-gw-' + nid, source: gateway ? 'router' : 'current', target: nid, etype: 'lan' } });
+  }
+
+  // Firestore devices not seen in ARP (previously scanned, maybe offline now)
+  for (const d of fsDevices) {
+    if (d.hostname === hostname) continue;
+    const fid = 'fs-' + d.hostname.replace(/[^a-zA-Z0-9]/g, '_');
+    if (elements.some(e => e.data?.id === fid || e.data?.label === d.hostname)) continue;
+    const dRisk = _deviceRisk(d);
+    elements.push({ data: {
+      id:       fid,
+      label:    d.hostname,
+      sublabel: 'prev. scanned',
+      type:     'known',
+      risk:     dRisk,
+      color:    _RISK_COLOR[dRisk],
+    }});
+    elements.push({ data: { id: 'e-gw-' + fid, source: gateway ? 'router' : 'internet', target: fid, etype: 'lan' } });
+  }
+
+  // Attack path edges
+  if (hasNetworkCVEs) {
+    elements.push({
+      data: { id: 'atk-entry', source: 'internet', target: 'current', etype: 'attack' },
+      classes: 'attack-path',
+    });
+    for (const nid of neighborIds) {
+      elements.push({
+        data: { id: 'atk-pivot-' + nid, source: 'current', target: nid, etype: 'pivot' },
+        classes: 'attack-pivot',
+      });
+    }
+  }
+
+  const container = document.getElementById('topology-cy');
+  container.innerHTML = '';
+
+  if (typeof cytoscape === 'undefined') {
+    container.innerHTML = '<div class="empty-state"><div class="empty-icon">⚠</div><div>Cytoscape.js not loaded yet — try again in a moment.</div></div>';
+    return;
+  }
+
+  const cy = cytoscape({
+    container: container,
+    elements:  elements,
+    style:     _topoStyle(),
+    layout: {
+      name:              'breadthfirst',
+      directed:          true,
+      roots:             ['#internet'],
+      padding:           48,
+      spacingFactor:     1.75,
+      animate:           true,
+      animationDuration: 500,
+    },
+    userZoomingEnabled:   true,
+    userPanningEnabled:   true,
+    boxSelectionEnabled:  false,
+    minZoom: 0.3,
+    maxZoom: 3,
+  });
+
+  cy.on('tap', 'node', evt => showTopoNodeInfo(evt.target.data()));
+  window._topo_cy = cy;
+}
+
+function _topoStyle() {
+  return [
+    {
+      selector: 'node',
+      style: {
+        'background-color':  '#0f1117',
+        'border-color':      '#2a3050',
+        'border-width':       2,
+        'label':             'data(label)',
+        'color':             '#e2e8f0',
+        'font-size':         '10px',
+        'font-family':       '"JetBrains Mono", monospace',
+        'text-valign':       'bottom',
+        'text-halign':       'center',
+        'text-margin-y':      8,
+        'width':              50,
+        'height':             50,
+        'text-wrap':         'wrap',
+        'text-max-width':     110,
+        'shape':             'ellipse',
+      },
+    },
+    {
+      selector: 'node[type="internet"]',
+      style: {
+        'background-color': '#0a1628',
+        'border-color':     '#4a9eff',
+        'border-width':      3,
+        'width':             68,
+        'height':            68,
+        'color':            '#4a9eff',
+        'font-size':        '11px',
+      },
+    },
+    {
+      selector: 'node[type="router"]',
+      style: {
+        'background-color': '#0f1117',
+        'border-color':     '#7b61ff',
+        'border-width':      2,
+        'shape':            'diamond',
+        'width':             60,
+        'height':            60,
+        'color':            '#a78bfa',
+      },
+    },
+    {
+      selector: 'node[type="current"]',
+      style: {
+        'background-color': 'data(color)',
+        'border-color':     'data(color)',
+        'border-width':      3,
+        'shape':            'rectangle',
+        'width':             76,
+        'height':            58,
+        'color':            '#ffffff',
+        'font-size':        '12px',
+        'font-weight':      '700',
+      },
+    },
+    {
+      selector: 'node[type="neighbor"], node[type="known"]',
+      style: {
+        'background-color': '#0f1117',
+        'border-color':     'data(color)',
+        'border-width':      2,
+        'color':            '#c0caf5',
+      },
+    },
+    {
+      selector: 'node[risk="critical"]',
+      style: { 'border-color': '#ff3860', 'border-width': 3 },
+    },
+    {
+      selector: 'node[risk="high"]',
+      style: { 'border-color': '#ff6b35', 'border-width': 3 },
+    },
+    {
+      selector: 'node[risk="clean"]',
+      style: { 'border-color': '#27c93f' },
+    },
+    {
+      selector: 'edge',
+      style: {
+        'width':                2,
+        'line-color':          '#2a3050',
+        'target-arrow-color':  '#2a3050',
+        'target-arrow-shape':  'triangle',
+        'curve-style':         'bezier',
+        'opacity':              0.5,
+      },
+    },
+    {
+      selector: 'edge[etype="wan"]',
+      style: {
+        'line-color':         '#4a9eff',
+        'target-arrow-color': '#4a9eff',
+        'opacity': 0.6,
+      },
+    },
+    {
+      selector: '.attack-path',
+      style: {
+        'line-color':          '#ff3860',
+        'target-arrow-color':  '#ff3860',
+        'width':                4,
+        'line-style':          'dashed',
+        'line-dash-pattern':   [12, 6],
+        'opacity':              1,
+        'z-index':              10,
+      },
+    },
+    {
+      selector: '.attack-pivot',
+      style: {
+        'line-color':          '#ff6b35',
+        'target-arrow-color':  '#ff6b35',
+        'width':                2,
+        'line-style':          'dashed',
+        'line-dash-pattern':   [6, 3],
+        'opacity':              0.85,
+        'z-index':              9,
+      },
+    },
+  ];
+}
+
+function showTopoNodeInfo(d) {
+  const panel = document.getElementById('topo-node-info');
+  if (!panel) return;
+  const riskLabel = {
+    critical: '<span style="color:var(--sev-critical)">● Critical</span>',
+    high:     '<span style="color:var(--sev-high)">● High</span>',
+    clean:    '<span style="color:var(--sev-low)">● Clean</span>',
+    unknown:  '<span style="color:var(--text-muted)">● Unknown</span>',
+    none:     '',
+  }[d.risk] ?? '';
+
+  if (d.type === 'internet') {
+    panel.innerHTML = '<strong>Internet</strong> — External attacker entry point. Devices with network-accessible CVEs are reachable from here.';
+  } else if (d.type === 'router') {
+    panel.innerHTML = `<strong>Gateway Router</strong> <code>${escapeHtml(d.label)}</code> — Controls all traffic on this network. A compromised host can intercept or reroute router-level traffic.`;
+  } else {
+    const sub = d.sublabel ? ` <span class="text-muted">${escapeHtml(d.sublabel)}</span>` : '';
+    panel.innerHTML = `<strong>${escapeHtml(d.label)}</strong>${sub} — Risk: ${riskLabel}`;
+    if (d.type === 'known') panel.innerHTML += ' <span class="text-muted">(previously scanned, not seen on ARP table)</span>';
+    if (d.state && d.state !== 'REACHABLE') panel.innerHTML += ` <span class="text-muted">· ARP state: ${escapeHtml(d.state)}</span>`;
+  }
+  panel.style.display = 'block';
+}
+
+function buildAttackNarrative(topo, cveData) {
+  const panel = document.getElementById('attack-narrative-panel');
+  const steps = document.getElementById('attack-steps');
+  if (!panel || !steps) return;
+
+  const hostname  = topo.hostname || 'this device';
+  const critical  = cveData?.counts?.critical ?? 0;
+  const high      = cveData?.counts?.high ?? 0;
+  const gateway   = topo.gateway;
+  const neighbors = (topo.neighbors || []).filter(n => n.ip && n.ip !== topo.gateway);
+  const topCVEs   = (cveData?.cves ?? [])
+    .filter(c => ['critical', 'high'].includes(c.severity))
+    .slice(0, 3);
+
+  const html = [];
+
+  if (!cveData) {
+    panel.style.display = 'none';
+    return;
+  }
+
+  if (critical + high > 0) {
+    const cveNames = topCVEs.map(c => `<code>${escapeHtml(c.id)}</code>`).join(', ') || 'see CVEs tab';
+    html.push(
+      `<strong>${escapeHtml(hostname)}</strong> has ` +
+      `<strong style="color:${critical > 0 ? 'var(--sev-critical)' : 'var(--sev-high)'}">` +
+      `${critical + high} high/critical CVE${critical + high !== 1 ? 's' : ''}</strong> ` +
+      `(${cveNames}). These vulnerabilities are network-reachable and may not require authentication.`
+    );
+    html.push(
+      `A remote attacker discovers <strong>${escapeHtml(hostname)}</strong> via internet scanning ` +
+      `(Shodan, Censys, Masscan). They craft a payload for one of the identified CVEs and gain ` +
+      `remote code execution — without ever touching the physical machine.`
+    );
+    if (gateway) {
+      html.push(
+        `The attacker is now <em>inside your network</em>. They can directly reach the gateway ` +
+        `router (<strong>${escapeHtml(gateway)}</strong>) and may perform ARP spoofing, ` +
+        `DNS hijacking, or traffic interception for all devices on this subnet.`
+      );
+    }
+    if (neighbors.length > 0) {
+      const ipList = neighbors.slice(0, 5).map(n => `<code>${escapeHtml(n.ip)}</code>`).join(', ');
+      const more   = neighbors.length > 5 ? ` and ${neighbors.length - 5} more` : '';
+      html.push(
+        `Lateral movement: from <strong>${escapeHtml(hostname)}</strong> the attacker probes ` +
+        `${ipList}${more}. Each device on <code>${topo.my_ips?.[0]?.ip ?? '192.168.x.x'}/` +
+        `${topo.my_ips?.[0]?.prefix ?? '24'}</code> is now a target — ` +
+        `NAS drives, cameras, smart TVs, other computers. This is the <strong>kill web</strong>.`
+      );
+      html.push(
+        `If any neighbor device has its own unpatched CVEs, the attacker can pivot to it ` +
+        `without ever touching the internet again — staying invisible to perimeter defenses.`
+      );
+    }
+    const sev = critical > 0 ? 'critical' : 'high';
+    html.push(
+      `<strong style="color:var(--sev-${sev})">Action required:</strong> ` +
+      `Patch or mitigate ${sev}-severity CVEs on <strong>${escapeHtml(hostname)}</strong> ` +
+      `to break the initial attack chain before an attacker gains a foothold.`
+    );
+  } else {
+    html.push(
+      `<strong style="color:var(--sev-low)">✓ No high or critical CVEs found on ${escapeHtml(hostname)}.</strong> ` +
+      `This device is not a known high-risk remote entry point at this time.`
+    );
+    if (neighbors.length > 0) {
+      html.push(
+        `${neighbors.length} neighbor device${neighbors.length !== 1 ? 's are' : ' is'} visible on the network. ` +
+        `Run Oasis Scan on those machines to check their CVE posture — ` +
+        `a vulnerable neighbor could pivot <em>into</em> this device laterally.`
+      );
+    }
+  }
+
+  panel.style.display = '';
+  steps.innerHTML = html.map(s => `<li class="attack-step">${s}</li>`).join('');
 }
