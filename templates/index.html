@@ -549,9 +549,9 @@
               </div>
             </div>
             <div class="device-stats">
-              <div class="device-stat">
+              <div class="device-stat device-stat-cpu">
                 <div class="device-stat-label">CPU</div>
-                <div class="device-stat-value">${escHtml((d.cpu ?? '—').split(' ').slice(-2).join(' '))}</div>
+                <div class="device-stat-value device-stat-value-wrap">${escHtml(d.cpu ?? '—')}</div>
               </div>
               <div class="device-stat">
                 <div class="device-stat-label">Cores</div>
