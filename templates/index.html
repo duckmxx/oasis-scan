@@ -73,7 +73,6 @@
         <div class="status-dot idle" id="status-dot"></div>
         <span id="status-label">Idle</span>
       </div>
-      <button class="btn btn-primary" id="scan-btn">▶ Run Scan</button>
     </div>
   </header>
 
@@ -494,12 +493,14 @@
       loadDevices(user.uid);
       window.__loadDevices = () => loadDevices(user.uid);
 
-      // Restore last scan's CVE + topology data so sections work after refresh
+      // Restore last scan's CVE + topology data, then auto-run a fresh scan
       window.__loadLastScanData(user.uid).then(data => {
         window.__savedData = data;
         if (data && typeof window.__onSavedDataReady === 'function') {
           window.__onSavedDataReady(data);
         }
+        // Auto-scan once on page load for fresh results
+        window.startScan?.();
       });
     });
 

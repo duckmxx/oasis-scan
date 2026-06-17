@@ -14,7 +14,7 @@ window.__onSavedDataReady = function(data) {
   if (!data) return;
   if (Array.isArray(data.cves)) {
     _cveData = { cves: data.cves, counts: data.counts };
-    if (data.cves.length > 0) populateCVEs(data.cves, data.counts);
+    populateCVEs(data.cves, data.counts);
   }
   if (data.topology) _savedTopology = data.topology;
 };
@@ -82,9 +82,10 @@ function filterCVETable() {
 }
 
 /* --- Scan --- */
-document.getElementById('scan-btn')?.addEventListener('click', startScan);
 
 async function startScan() {
+  if (startScan._running) return;
+  startScan._running = true;
   _dot       = document.getElementById('status-dot');
   _statusLbl = document.getElementById('status-label');
 
@@ -123,6 +124,7 @@ async function startScan() {
 
   } catch (err) {
     clearInterval(stepTimer);
+    startScan._running = false;
     if (_dot)      _dot.className = 'status-dot error';
     if (_statusLbl) _statusLbl.textContent = 'Scan error';
     if (stepLabel) stepLabel.textContent = 'Scan failed: ' + err.message;
@@ -134,6 +136,7 @@ async function startScan() {
   // Hide overlay immediately — show system specs to user right away
   if (overlay) overlay.style.display = 'none';
   if (scanBtn) scanBtn.disabled = false;
+  startScan._running = false;
 
   // Both checks run in parallel after the overlay closes
   runCVEAnalysis(_lastReport);
