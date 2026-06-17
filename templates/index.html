@@ -43,6 +43,10 @@
 
     <p class="sidebar-section-label">System</p>
     <ul class="sidebar-nav">
+      <li class="nav-item" data-section="section-devices">
+        <span class="nav-icon">⊟</span> Devices
+        <span class="nav-badge hidden" id="nav-device-badge">0</span>
+      </li>
       <li class="nav-item" data-section="section-history">
         <span class="nav-icon">↺</span> Scan History
       </li>
@@ -314,6 +318,26 @@
     </section>
 
     <!-- ===================================================
+         SECTION: DEVICES
+         =================================================== -->
+    <section class="page-section hidden" id="section-devices">
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title"><span class="icon">⊟</span> Devices</div>
+          <span class="text-muted" style="font-size:12px" id="devices-count">—</span>
+        </div>
+        <div class="panel-body">
+          <div class="devices-grid" id="devices-grid">
+            <div class="empty-state" style="grid-column:1/-1">
+              <div class="empty-icon">⊟</div>
+              <div>No devices found — run a scan to register this device.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================================================
          SECTION: SCAN HISTORY  (stub)
          =================================================== -->
     <section class="page-section hidden" id="section-history">
@@ -419,8 +443,10 @@
         document.getElementById('user-provider-label').textContent = provider + ' · ' + created;
       }
 
-      // Load scan history from Firestore
+      // Load scan history and devices from Firestore
       loadScanHistory(user.uid);
+      loadDevices(user.uid);
+      window.__loadDevices = () => loadDevices(user.uid);
     });
 
     async function loadScanHistory(uid) {
@@ -449,6 +475,82 @@
       }
     }
 
+    async function loadDevices(uid) {
+      try {
+        const snap = await getDocs(collection(db, 'users', uid, 'scans'));
+        const grid  = document.getElementById('devices-grid');
+        const badge = document.getElementById('nav-device-badge');
+        const count = document.getElementById('devices-count');
+        if (!grid) return;
+
+        // Group by hostname — keep the most recent scan per host
+        const devices = new Map();
+        snap.forEach(doc => {
+          const d  = doc.data();
+          const h  = d.hostname || 'unknown';
+          const ts = d.createdAt?.toDate?.()?.getTime?.()
+                   ?? (d.scanned_at ? new Date(d.scanned_at).getTime() : 0);
+          if (!devices.has(h) || ts > devices.get(h)._ts)
+            devices.set(h, { ...d, _ts: ts });
+        });
+
+        if (devices.size === 0) return;
+
+        // Update badge + count
+        if (badge)  { badge.textContent = devices.size; badge.classList.remove('hidden'); }
+        if (count)  count.textContent = `${devices.size} device${devices.size !== 1 ? 's' : ''}`;
+
+        // Render device cards
+        grid.innerHTML = '';
+        devices.forEach((d, hostname) => {
+          const scanDate = d.createdAt?.toDate?.()?.toLocaleString()
+                        ?? (d.scanned_at ? new Date(d.scanned_at).toLocaleString() : '—');
+          const memTotalGB = d.mem_total ? (d.mem_total / (1024 ** 3)).toFixed(1) + ' GiB' : '?';
+          const distroIcon = { arch: '🐧', debian: '🐧', rhel: '🎩' }[d.distro_family] ?? '🖥';
+
+          const card = document.createElement('div');
+          card.className = 'device-card';
+          card.innerHTML = `
+            <div class="device-card-header">
+              <div class="device-icon">${distroIcon}</div>
+              <div>
+                <div class="device-name">${escHtml(hostname)}</div>
+                <div class="device-os">${escHtml(d.os ?? '—')}</div>
+              </div>
+            </div>
+            <div class="device-stats">
+              <div class="device-stat">
+                <div class="device-stat-label">CPU</div>
+                <div class="device-stat-value">${escHtml((d.cpu ?? '—').split(' ').slice(-2).join(' '))}</div>
+              </div>
+              <div class="device-stat">
+                <div class="device-stat-label">Cores</div>
+                <div class="device-stat-value">${escHtml(String(d.cpu_cores ?? '?'))}</div>
+              </div>
+              <div class="device-stat">
+                <div class="device-stat-label">Memory</div>
+                <div class="device-stat-value">${memTotalGB}</div>
+              </div>
+              <div class="device-stat">
+                <div class="device-stat-label">Packages</div>
+                <div class="device-stat-value">${escHtml(String(d.pkg_count ?? '?'))}</div>
+              </div>
+            </div>
+            <div class="device-footer">
+              <span class="device-kernel">${escHtml(d.kernel ?? '—')}</span>
+              <span class="device-last-scan">Last scan: ${escHtml(scanDate)}</span>
+            </div>`;
+          grid.appendChild(card);
+        });
+      } catch (e) {
+        console.error('Failed to load devices', e);
+      }
+    }
+
+    function escHtml(s) {
+      return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    }
+
     // Expose save function so main.js can call it after a scan
     window.__saveScanResult = async function(result) {
       const user = auth.currentUser;
@@ -456,7 +558,8 @@
       try {
         await addDoc(collection(db, 'users', user.uid, 'scans'), {
           ...result,
-          createdAt: serverTimestamp()
+          createdAt:  serverTimestamp(),
+          scanned_at: new Date().toISOString(),
         });
       } catch (e) {
         console.error('Failed to save scan result', e);

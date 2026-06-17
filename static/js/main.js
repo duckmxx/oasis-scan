@@ -134,13 +134,27 @@ async function startScan() {
     populateDashboard(data.report);
 
     if (typeof window.__saveScanResult === 'function') {
-      const r = data.report;
-      window.__saveScanResult({
-        hostname: r.os?.hostname ?? '',
-        os:       r.os?.pretty_name ?? '',
-        apps:     r.packages?.count ?? 0,
+      const r   = data.report;
+      const os  = r.os  ?? {};
+      const cpu = r.cpu?.summary ?? {};
+      const mem = r.memory?.summary ?? {};
+      await window.__saveScanResult({
+        hostname:         os.hostname      ?? '',
+        os:               os.pretty_name  ?? '',
+        kernel:           os.release       ?? '',
+        arch:             os.machine       ?? '',
+        cpu:              cpu.model_name   ?? '',
+        cpu_cores:        cpu.logical_cpus ?? 0,
+        mem_total:        mem.total_bytes  ?? 0,
+        mem_available:    mem.available_bytes ?? 0,
+        pkg_count:        r.packages?.count ?? 0,
+        pkg_manager:      r.packages?.manager ?? '',
+        services_running: r.services?.running?.length ?? 0,
+        suid_count:       r.suid_files?.length ?? 0,
+        distro_family:    r.distro_family ?? '',
         critical: 0, high: 0, other: 0,
       });
+      if (typeof window.__loadDevices === 'function') window.__loadDevices();
     }
 
     if (dot)       { dot.className = 'status-dot'; }
