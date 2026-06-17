@@ -3,10 +3,21 @@
    ========================================================= */
 
 // Module-level refs kept so runCVEAnalysis() can update the status bar
-let _dot        = null;
-let _statusLbl  = null;
-let _lastReport = null;
-let _cveData    = null;   // set by runCVEAnalysis; used by topology map
+let _dot           = null;
+let _statusLbl     = null;
+let _lastReport    = null;
+let _cveData       = null;   // set by runCVEAnalysis; used by topology map
+let _savedTopology = null;   // set when saved data is loaded from Firestore
+
+// Called by Firebase module once saved scan data is fetched from Firestore
+window.__onSavedDataReady = function(data) {
+  if (!data) return;
+  if (Array.isArray(data.cves)) {
+    _cveData = { cves: data.cves, counts: data.counts };
+    if (data.cves.length > 0) populateCVEs(data.cves, data.counts);
+  }
+  if (data.topology) _savedTopology = data.topology;
+};
 
 /* --- Nav --- */
 document.querySelectorAll('.nav-item[data-section]').forEach(item => {
@@ -17,7 +28,19 @@ document.querySelectorAll('.nav-item[data-section]').forEach(item => {
     document.querySelectorAll('.page-section').forEach(s => s.classList.add('hidden'));
     const el = document.getElementById(target);
     if (el) { el.classList.remove('hidden'); el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
-    if (target === 'section-topology' && _lastReport) runTopologyBuild();
+    if (target === 'section-topology') {
+      if (_lastReport) {
+        runTopologyBuild();
+      } else {
+        const topo = _savedTopology || window.__savedData?.topology;
+        const cvs  = _cveData       || (window.__savedData ? { cves: window.__savedData.cves, counts: window.__savedData.counts } : null);
+        if (topo) runTopologyFromSaved(topo, cvs);
+      }
+    }
+    if (target === 'section-cves' && !_cveData && window.__savedData?.cves?.length > 0) {
+      _cveData = { cves: window.__savedData.cves, counts: window.__savedData.counts };
+      populateCVEs(window.__savedData.cves, window.__savedData.counts);
+    }
     if (target === 'section-apps' && !_lastReport) {
       if (typeof window.__loadPackages === 'function') {
         window.__loadPackages().then(data => {
@@ -204,6 +227,22 @@ async function runCVEAnalysis(report) {
       const os  = r.os            ?? {};
       const cpu = r.cpu?.summary  ?? {};
       const mem = r.memory?.summary ?? {};
+
+      // Extract network topology from the scan report
+      const netRoutes = Array.isArray(r.network?.routes) ? r.network.routes : [];
+      const netAddrs  = Array.isArray(r.network?.addresses) ? r.network.addresses : [];
+      const topoData  = {
+        hostname:  os.hostname ?? '',
+        gateway:   netRoutes.find(rt => rt.dst === 'default')?.gateway ?? null,
+        my_ips:    netAddrs
+          .filter(iface => !iface.ifname?.startsWith('lo'))
+          .flatMap(iface =>
+            (iface.addr_info ?? [])
+              .filter(a => a.family === 'inet')
+              .map(a => ({ interface: iface.ifname, ip: a.local, prefix: a.prefixlen }))
+          ),
+        neighbors: r.network_neighbors ?? [],
+      };
       await window.__saveScanResult({
         hostname:         os.hostname             ?? '',
         os:               os.pretty_name          ?? '',
@@ -225,6 +264,13 @@ async function runCVEAnalysis(report) {
         critical: data.counts.critical            ?? 0,
         high:     data.counts.high                ?? 0,
         other:    (data.counts.medium ?? 0) + (data.counts.low ?? 0),
+        counts:   data.counts,
+        cves:     data.cves.map(c => ({
+          id: c.id, package: c.package, installed: c.installed ?? '',
+          fixed: c.fixed ?? '', severity: c.severity, cvss: c.cvss ?? null,
+          summary: (c.summary ?? '').slice(0, 400), url: c.url ?? '',
+        })),
+        topology: topoData,
       });
       if (typeof window.__loadDevices === 'function') window.__loadDevices();
     }
@@ -510,23 +556,68 @@ function populateCVEs(cves, counts) {
         const sev   = c.severity || 'unknown';
         const score = c.cvss != null ? Number(c.cvss).toFixed(1) : '—';
         return `
-          <tr class="cve-row" data-severity="${sev}">
+          <tr class="cve-row" data-severity="${sev}"
+              data-cve-id="${escapeHtml(c.id)}"
+              data-cve-pkg="${escapeHtml(c.package)}"
+              data-cve-installed="${escapeHtml(c.installed ?? '')}"
+              data-cve-fixed="${escapeHtml(c.fixed ?? '')}"
+              data-cve-summary="${escapeHtml(c.summary ?? '')}"
+              data-cve-url="${escapeHtml(c.url ?? '')}"
+              data-cve-cvss="${escapeHtml(score)}">
             <td>
-              <a class="cve-id" href="${escapeHtml(c.url)}" target="_blank" rel="noopener">
-                ${escapeHtml(c.id)}
-              </a>
+              <span class="cve-id mono">${escapeHtml(c.id)}</span>
             </td>
             <td>${escapeHtml(c.package)}</td>
-            <td class="mono" style="font-size:11px">${escapeHtml(c.installed)}</td>
-            <td class="mono" style="font-size:11px;color:var(--sev-low)">${escapeHtml(c.fixed)}</td>
+            <td class="mono" style="font-size:11px">${escapeHtml(c.installed ?? '—')}</td>
+            <td class="mono" style="font-size:11px;color:var(--sev-low)">${escapeHtml(c.fixed ?? '—')}</td>
             <td class="cvss-score cvss-${sev}">${score}</td>
             <td><span class="badge badge-${sev}">${sev}</span></td>
             <td class="cve-actions">
-              <a href="${escapeHtml(c.url)}" target="_blank" rel="noopener"
-                 class="btn btn-ghost btn-sm">Details</a>
+              <button class="btn btn-ghost btn-sm cve-expand-btn">Details</button>
             </td>
           </tr>`;
       }).join('');
+
+      // Expandable detail rows
+      tbody.querySelectorAll('.cve-expand-btn').forEach(btn => {
+        btn.addEventListener('click', e => {
+          e.stopPropagation();
+          const row  = btn.closest('tr');
+          const next = row.nextElementSibling;
+          if (next?.classList.contains('cve-detail-row')) {
+            next.remove();
+            btn.textContent = 'Details';
+            return;
+          }
+          const d       = row.dataset;
+          const summary = d.cveSummary || 'No description available.';
+          const url     = d.cveUrl;
+          const detail  = document.createElement('tr');
+          detail.className = 'cve-detail-row';
+          detail.innerHTML = `
+            <td colspan="7" class="cve-detail-cell">
+              <div class="cve-detail-body">
+                <p class="cve-detail-summary">${escapeHtml(summary)}</p>
+                <div class="cve-detail-meta">
+                  <span>Package <code>${escapeHtml(d.cvePkg)}</code></span>
+                  <span>Installed <code>${escapeHtml(d.cveInstalled) || '—'}</code></span>
+                  <span>Fixed in <code class="text-ok">${escapeHtml(d.cveFixed) || 'no fix yet'}</code></span>
+                  <span>CVSS <code>${escapeHtml(d.cveCvss)}</code></span>
+                </div>
+                <div class="cve-detail-actions">
+                  ${url ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener"
+                      class="btn btn-ghost btn-sm">View Advisory ↗</a>` : ''}
+                  <button class="btn btn-ghost btn-sm"
+                    onclick="navigator.clipboard.writeText('${escapeHtml(d.cveCveId)}').then(()=>{this.textContent='Copied!';setTimeout(()=>this.textContent='Copy ID',1500)})">
+                    Copy ID
+                  </button>
+                </div>
+              </div>
+            </td>`;
+          row.insertAdjacentElement('afterend', detail);
+          btn.textContent = 'Close';
+        });
+      });
     }
   }
 
@@ -626,6 +717,21 @@ function sevColor(sev) {
 document.getElementById('topo-rebuild-btn')?.addEventListener('click', () => {
   if (_lastReport) runTopologyBuild();
 });
+
+async function runTopologyFromSaved(topo, cveData) {
+  const container = document.getElementById('topology-cy');
+  if (!container) return;
+  container.innerHTML = `<div class="empty-state">
+    <div class="scan-spinner" style="width:32px;height:32px;margin:0 auto 12px"></div>
+    <div style="color:var(--text-muted)">Loading saved topology…</div>
+  </div>`;
+  let fsDevices = [];
+  if (typeof window.__getFirestoreDevices === 'function') {
+    fsDevices = await window.__getFirestoreDevices();
+  }
+  renderTopology(topo, cveData, fsDevices);
+  buildAttackNarrative(topo, cveData);
+}
 
 async function runTopologyBuild() {
   const container = document.getElementById('topology-cy');

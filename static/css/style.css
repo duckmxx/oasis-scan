@@ -1094,6 +1094,60 @@ ul { list-style: none; }
 }
 
 /* =========================================================
+   CVE Detail Rows
+   ========================================================= */
+
+.cve-expand-btn {
+  white-space: nowrap;
+}
+
+.cve-detail-row {
+  background: var(--bg-hover);
+}
+
+.cve-detail-cell {
+  padding: 0 !important;
+}
+
+.cve-detail-body {
+  padding: 14px 20px 16px;
+  border-left: 3px solid var(--border-accent);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.cve-detail-summary {
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.65;
+  margin: 0;
+}
+
+.cve-detail-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.cve-detail-meta code {
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+}
+
+.cve-detail-meta .text-ok {
+  color: var(--sev-low);
+}
+
+.cve-detail-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* =========================================================
    Topology / Attack Map
    ========================================================= */
 

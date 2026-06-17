@@ -587,6 +587,14 @@
       loadScanHistory(user.uid);
       loadDevices(user.uid);
       window.__loadDevices = () => loadDevices(user.uid);
+
+      // Restore last scan's CVE + topology data so sections work after refresh
+      window.__loadLastScanData(user.uid).then(data => {
+        window.__savedData = data;
+        if (data && typeof window.__onSavedDataReady === 'function') {
+          window.__onSavedDataReady(data);
+        }
+      });
     });
 
     async function loadScanHistory(uid) {
@@ -706,6 +714,33 @@
     function escHtml(s) {
       return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
     }
+
+    // Load the most recent scan's CVE + topology data (restored on page load)
+    window.__loadLastScanData = async function(uid) {
+      try {
+        const q    = query(collection(db, 'users', uid, 'scans'), orderBy('createdAt', 'desc'));
+        const snap = await getDocs(q);
+        for (const doc of snap.docs) {
+          const d = doc.data();
+          if (d.counts !== undefined || Array.isArray(d.cves)) {
+            return {
+              cves:        d.cves     ?? [],
+              counts:      d.counts   ?? { critical: d.critical??0, high: d.high??0, medium: 0, low: 0, unknown: 0 },
+              topology:    d.topology ?? null,
+              hostname:    d.hostname ?? '',
+              os:          d.os       ?? '',
+              kernel:      d.kernel   ?? '',
+              cpu:         d.cpu      ?? '',
+              pkg_count:   d.pkg_count  ?? 0,
+              pkg_manager: d.pkg_manager ?? '',
+            };
+          }
+        }
+      } catch (e) {
+        console.error('loadLastScanData failed', e);
+      }
+      return null;
+    };
 
     // Load packages from the most recent scan that has them (used by Applications tab)
     window.__loadPackages = async function() {
