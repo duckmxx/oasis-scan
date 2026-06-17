@@ -468,6 +468,31 @@
          SECTION: DEVICES
          =================================================== -->
     <section class="page-section hidden" id="section-devices">
+
+      <!-- Network Map -->
+      <div class="panel" style="overflow:hidden">
+        <div class="panel-header">
+          <div class="panel-title"><span class="icon">⬡</span> Network Map</div>
+          <div style="display:flex;align-items:center;gap:12px">
+            <div class="topo-legend-inline">
+              <span><span class="topo-dot crit"></span>Critical</span>
+              <span><span class="topo-dot high"></span>High</span>
+              <span><span class="topo-dot ok"></span>Clean</span>
+              <span><span class="topo-line-sample pivot"></span>Lateral move</span>
+            </div>
+            <button class="btn btn-ghost btn-sm" id="devices-map-rebuild">↺ Rebuild</button>
+          </div>
+        </div>
+        <div id="devices-map-cy" class="topo-canvas" style="height:380px">
+          <div class="empty-state">
+            <div class="empty-icon">⬡</div>
+            <div>Navigate to this section after scanning to build the network map.</div>
+          </div>
+        </div>
+        <div id="devices-map-info" class="topo-node-info"></div>
+      </div>
+
+      <!-- Device cards -->
       <div class="panel">
         <div class="panel-header">
           <div class="panel-title"><span class="icon">⊟</span> Devices</div>
@@ -648,6 +673,9 @@
         if (badge)  { badge.textContent = devices.size; badge.classList.remove('hidden'); }
         if (count)  count.textContent = `${devices.size} device${devices.size !== 1 ? 's' : ''}`;
 
+        // Cache device data so main.js modal + map can access it
+        window.__deviceCache = Object.fromEntries(devices);
+
         // Render device cards
         grid.innerHTML = '';
         devices.forEach((d, hostname) => {
@@ -704,8 +732,17 @@
               <span class="device-kernel">${escHtml(d.kernel ?? '—')}</span>
               <span class="device-last-scan">Last scan: ${escHtml(scanDate)}</span>
             </div>`;
+          card.style.cursor = 'pointer';
+          card.addEventListener('click', () => {
+            if (typeof window.__openDeviceModal === 'function')
+              window.__openDeviceModal(window.__deviceCache?.[hostname] ?? d);
+          });
           grid.appendChild(card);
         });
+
+        // Build network map now that device cache is populated
+        if (typeof window.__buildDeviceNetworkMap === 'function')
+          window.__buildDeviceNetworkMap(Object.values(window.__deviceCache));
       } catch (e) {
         console.error('Failed to load devices', e);
       }
@@ -803,6 +840,29 @@
       }
     };
   </script>
+  <!-- =====================================================
+       DEVICE DETAIL MODAL (slide-over)
+       ===================================================== -->
+  <div id="device-modal" class="device-modal-overlay" style="display:none"
+       onclick="if(event.target===this)this.style.display='none'">
+    <div class="device-modal-panel">
+      <div class="device-modal-header">
+        <div>
+          <div id="modal-hostname" class="device-modal-hostname"></div>
+          <div id="modal-os" class="device-modal-os"></div>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;flex-shrink:0">
+          <span id="modal-risk-badge" class="badge" style="display:none"></span>
+          <button class="btn btn-ghost btn-sm"
+            onclick="document.getElementById('device-modal').style.display='none'">✕ Close</button>
+        </div>
+      </div>
+      <div class="device-modal-body" id="device-modal-body">
+        <div class="empty-state">Select a device to view details.</div>
+      </div>
+    </div>
+  </div>
+
   <script src="/static/js/main.js"></script>
 </body>
 </html>

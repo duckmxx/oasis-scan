@@ -37,6 +37,9 @@ document.querySelectorAll('.nav-item[data-section]').forEach(item => {
         if (topo) runTopologyFromSaved(topo, cvs);
       }
     }
+    if (target === 'section-devices' && window.__deviceCache) {
+      buildDeviceNetworkMap(Object.values(window.__deviceCache));
+    }
     if (target === 'section-cves' && !_cveData && window.__savedData?.cves?.length > 0) {
       _cveData = { cves: window.__savedData.cves, counts: window.__savedData.counts };
       populateCVEs(window.__savedData.cves, window.__savedData.counts);
@@ -591,7 +594,8 @@ function populateCVEs(cves, counts) {
           }
           const d       = row.dataset;
           const summary = d.cveSummary || 'No description available.';
-          const url     = d.cveUrl;
+          const url     = d.cveUrl ||
+            (d.cveId?.startsWith('CVE-') ? `https://nvd.nist.gov/vuln/detail/${d.cveId}` : '');
           const detail  = document.createElement('tr');
           detail.className = 'cve-detail-row';
           detail.innerHTML = `
@@ -608,7 +612,7 @@ function populateCVEs(cves, counts) {
                   ${url ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener"
                       class="btn btn-ghost btn-sm">View Advisory ↗</a>` : ''}
                   <button class="btn btn-ghost btn-sm"
-                    onclick="navigator.clipboard.writeText('${escapeHtml(d.cveCveId)}').then(()=>{this.textContent='Copied!';setTimeout(()=>this.textContent='Copy ID',1500)})">
+                    onclick="navigator.clipboard.writeText('${escapeHtml(d.cveId)}').then(()=>{this.textContent='Copied!';setTimeout(()=>this.textContent='Copy ID',1500)})">
                     Copy ID
                   </button>
                 </div>
@@ -708,6 +712,225 @@ function sevColor(sev) {
   return { critical: 'var(--sev-critical)', high: 'var(--sev-high)',
            medium: 'var(--sev-medium)', low: 'var(--sev-low)' }[sev]
          ?? 'var(--text-muted)';
+}
+
+/* =========================================================
+   DEVICES — modal + network map
+   ========================================================= */
+
+document.getElementById('devices-map-rebuild')?.addEventListener('click', () => {
+  if (window.__deviceCache) buildDeviceNetworkMap(Object.values(window.__deviceCache));
+});
+
+// Wire nav click to trigger device map build
+const _origNavHandler = document.querySelectorAll('.nav-item[data-section]');
+
+window.__openDeviceModal = function(d) {
+  const modal = document.getElementById('device-modal');
+  const body  = document.getElementById('device-modal-body');
+  if (!modal || !body) return;
+
+  const hostname = d.hostname ?? '—';
+  const os       = d.os      ?? '—';
+  const kernel   = d.kernel  ?? '—';
+  const arch     = d.arch    ?? '—';
+  const cpu      = d.cpu     ?? '—';
+  const cores    = d.cpu_cores ?? '?';
+  const memGB    = d.mem_total      ? (d.mem_total / (1024 ** 3)).toFixed(1) + ' GiB' : '?';
+  const freeGB   = d.mem_available  ? (d.mem_available / (1024 ** 3)).toFixed(1) + ' GiB' : '?';
+  const pkgCount = d.pkg_count ?? 0;
+  const pkgMgr   = d.pkg_manager ?? '';
+  const critical = d.critical ?? 0;
+  const high     = d.high    ?? 0;
+  const other    = d.other   ?? 0;
+  const cves     = Array.isArray(d.cves) ? d.cves : [];
+  const topo     = d.topology ?? null;
+  const scanDate = d.createdAt?.toDate?.()?.toLocaleString()
+                ?? (d.scanned_at ? new Date(d.scanned_at).toLocaleString() : '—');
+
+  document.getElementById('modal-hostname').textContent = hostname;
+  document.getElementById('modal-os').textContent       = os;
+
+  const riskLvl   = critical > 0 ? 'critical' : high > 0 ? 'high' : (d.critical !== undefined ? 'clean' : 'unknown');
+  const riskBadge = document.getElementById('modal-risk-badge');
+  if (riskBadge) {
+    const cls = { critical: 'badge-critical', high: 'badge-high', clean: 'badge-low', unknown: '' }[riskLvl];
+    riskBadge.className = 'badge ' + cls;
+    riskBadge.textContent = riskLvl;
+    riskBadge.style.display = riskLvl === 'unknown' ? 'none' : '';
+  }
+
+  const cveTableHtml = cves.length > 0
+    ? `<div class="modal-section">
+        <div class="modal-section-title">CVEs — top ${Math.min(cves.length, 10)} of ${cves.length}</div>
+        <table class="modal-cve-table">
+          <thead><tr><th>ID</th><th>Package</th><th>Sev.</th><th>CVSS</th><th></th></tr></thead>
+          <tbody>
+            ${cves.slice(0, 10).map(c => {
+              const advUrl = c.url || (c.id?.startsWith('CVE-') ? `https://nvd.nist.gov/vuln/detail/${c.id}` : '');
+              return `<tr>
+                <td class="mono" style="font-size:11px">${escapeHtml(c.id)}</td>
+                <td>${escapeHtml(c.package)}</td>
+                <td><span class="badge badge-${c.severity}">${c.severity}</span></td>
+                <td class="cvss-score cvss-${c.severity}">${c.cvss != null ? Number(c.cvss).toFixed(1) : '—'}</td>
+                <td>${advUrl ? `<a href="${escapeHtml(advUrl)}" target="_blank" rel="noopener" class="btn btn-ghost btn-sm" style="font-size:10px;padding:2px 6px">↗</a>` : ''}</td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>`
+    : (d.critical !== undefined
+        ? `<div class="modal-section"><div class="device-clean" style="padding:8px 0">✓ No known CVEs detected</div></div>`
+        : `<div class="modal-section"><div class="text-muted" style="font-size:12px">CVE data not yet available — run a scan with CVE analysis.</div></div>`);
+
+  const netHtml = topo
+    ? `<div class="modal-section">
+        <div class="modal-section-title">Network</div>
+        <div class="modal-meta-grid">
+          ${topo.gateway ? `<div class="modal-meta-item"><div class="modal-meta-label">Gateway</div><div class="modal-meta-value mono">${escapeHtml(topo.gateway)}</div></div>` : ''}
+          ${(topo.my_ips ?? []).slice(0, 3).map(ip => `
+            <div class="modal-meta-item">
+              <div class="modal-meta-label">${escapeHtml(ip.interface ?? '')}</div>
+              <div class="modal-meta-value mono">${escapeHtml(ip.ip ?? '')}/${ip.prefix ?? ''}</div>
+            </div>`).join('')}
+          ${(topo.neighbors ?? []).length > 0 ? `
+            <div class="modal-meta-item">
+              <div class="modal-meta-label">LAN devices</div>
+              <div class="modal-meta-value">${topo.neighbors.length} in ARP table</div>
+            </div>` : ''}
+        </div>
+      </div>` : '';
+
+  body.innerHTML = `
+    <div class="modal-specs-row">
+      <div class="modal-spec"><div class="modal-spec-label">Kernel</div><div class="modal-spec-value mono">${escapeHtml(kernel)}</div></div>
+      <div class="modal-spec"><div class="modal-spec-label">Arch</div><div class="modal-spec-value">${escapeHtml(arch)}</div></div>
+      <div class="modal-spec"><div class="modal-spec-label">CPU</div><div class="modal-spec-value">${escapeHtml(cpu)}</div></div>
+      <div class="modal-spec"><div class="modal-spec-label">Cores</div><div class="modal-spec-value">${escapeHtml(String(cores))}</div></div>
+      <div class="modal-spec"><div class="modal-spec-label">Memory</div><div class="modal-spec-value">${escapeHtml(memGB)} · ${escapeHtml(freeGB)} free</div></div>
+      <div class="modal-spec"><div class="modal-spec-label">Packages</div><div class="modal-spec-value">${pkgCount} via ${escapeHtml(pkgMgr)}</div></div>
+    </div>
+    <div class="modal-cve-summary">
+      <div class="modal-cve-badge"><div class="modal-cve-num" style="color:var(--sev-critical)">${critical}</div><div class="modal-cve-lbl">critical</div></div>
+      <div class="modal-cve-badge"><div class="modal-cve-num" style="color:var(--sev-high)">${high}</div><div class="modal-cve-lbl">high</div></div>
+      <div class="modal-cve-badge"><div class="modal-cve-num" style="color:var(--sev-medium)">${other}</div><div class="modal-cve-lbl">med/low</div></div>
+      <div style="margin-left:auto;font-size:11px;color:var(--text-muted)">Last scan<br>${escapeHtml(scanDate)}</div>
+    </div>
+    ${cveTableHtml}
+    ${netHtml}`;
+
+  modal.style.display = 'flex';
+};
+
+window.__buildDeviceNetworkMap = buildDeviceNetworkMap;
+function buildDeviceNetworkMap(devicesArray) {
+  const container = document.getElementById('devices-map-cy');
+  if (!container) return;
+
+  if (!devicesArray || devicesArray.length === 0) {
+    container.innerHTML = '<div class="empty-state"><div class="empty-icon">⬡</div><div>No devices found — run a scan first.</div></div>';
+    return;
+  }
+
+  if (typeof cytoscape === 'undefined') {
+    container.innerHTML = '<div class="empty-state"><div class="empty-icon">⚠</div><div>Cytoscape not loaded yet — try again in a moment.</div></div>';
+    return;
+  }
+
+  container.innerHTML = '';
+
+  // Group devices by gateway to form LAN clusters
+  const byGateway = new Map();
+  const noGateway = [];
+  for (const d of devicesArray) {
+    const gw = d.topology?.gateway;
+    if (gw) {
+      if (!byGateway.has(gw)) byGateway.set(gw, []);
+      byGateway.get(gw).push(d);
+    } else {
+      noGateway.push(d);
+    }
+  }
+
+  const elements = [];
+
+  byGateway.forEach((devs, gw) => {
+    const gwId = 'gw-' + gw.replace(/[.:]/g, '_');
+    elements.push({ data: { id: gwId, label: gw, sublabel: 'Router', type: 'router', risk: 'none' } });
+
+    for (const d of devs) {
+      const did  = 'dev-' + d.hostname.replace(/[^a-zA-Z0-9]/g, '_');
+      const risk = _deviceRisk(d);
+      elements.push({ data: {
+        id:       did,
+        label:    d.hostname,
+        sublabel: (d.topology?.my_ips?.[0]?.ip ?? ''),
+        type:     'known',
+        risk,
+        color:    _RISK_COLOR[risk],
+        hostname: d.hostname,
+      }});
+      elements.push({ data: { id: 'e-' + gwId + '-' + did, source: gwId, target: did, etype: 'lan' } });
+    }
+
+    // Lateral movement arrows: high-risk device → peers on same LAN
+    const risky = devs.filter(d => (d.critical ?? 0) + (d.high ?? 0) > 0);
+    for (const hr of risky) {
+      const hrId = 'dev-' + hr.hostname.replace(/[^a-zA-Z0-9]/g, '_');
+      for (const peer of devs) {
+        if (peer.hostname === hr.hostname) continue;
+        const peerId = 'dev-' + peer.hostname.replace(/[^a-zA-Z0-9]/g, '_');
+        elements.push({
+          data: { id: 'pivot-' + hrId + '-' + peerId, source: hrId, target: peerId, etype: 'pivot' },
+          classes: 'attack-pivot',
+        });
+      }
+    }
+  });
+
+  // Devices with no gateway saved (old scans) — show as isolated nodes
+  for (const d of noGateway) {
+    const did  = 'dev-' + d.hostname.replace(/[^a-zA-Z0-9]/g, '_');
+    const risk = _deviceRisk(d);
+    if (!elements.some(e => e.data?.id === did)) {
+      elements.push({ data: { id: did, label: d.hostname, sublabel: 'no network data', type: 'known', risk, color: _RISK_COLOR[risk], hostname: d.hostname } });
+    }
+  }
+
+  const cy = cytoscape({
+    container,
+    elements,
+    style: _topoStyle(),
+    layout: {
+      name:            'cose',
+      animate:          true,
+      animationDuration: 500,
+      nodeRepulsion:    5000,
+      idealEdgeLength:  120,
+      padding:          40,
+    },
+    userZoomingEnabled:  true,
+    userPanningEnabled:  true,
+    boxSelectionEnabled: false,
+    minZoom: 0.3,
+    maxZoom: 4,
+  });
+
+  cy.on('tap', 'node', evt => {
+    const data = evt.target.data();
+    const info = document.getElementById('devices-map-info');
+    if (!info) return;
+
+    if (data.type === 'router') {
+      info.innerHTML = `<strong>Gateway Router</strong> <code>${escapeHtml(data.label)}</code> — all devices on this row share this LAN.`;
+      info.style.display = 'block';
+    } else if (data.hostname && window.__deviceCache?.[data.hostname]) {
+      info.innerHTML = `<strong>${escapeHtml(data.hostname)}</strong> — <span style="color:${_RISK_COLOR[data.risk]}">${data.risk}</span> risk · <button class="btn btn-ghost btn-sm" style="margin-left:8px" onclick="window.__openDeviceModal(window.__deviceCache['${escapeHtml(data.hostname)}'])">View Details</button>`;
+      info.style.display = 'block';
+    }
+  });
+
+  window._devices_cy = cy;
 }
 
 /* =========================================================
