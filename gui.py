@@ -48,6 +48,7 @@ class App(tk.Tk):
         self.title("Oasis Scan")
         self.configure(bg=BG)
         self.resizable(False, False)
+        self.protocol("WM_DELETE_WINDOW", self.destroy)
         self._creds: tuple[str, str] | None = None   # (token, uid)
         self._frame: tk.Frame | None = None
         self._center(480, 560)
@@ -73,9 +74,11 @@ class LoginFrame(tk.Frame):
         self._build()
 
     def _build(self):
+        _topbar(self)
+
         # ── Logo ──────────────────────────────────────────────────────────────
         top = tk.Frame(self, bg=BG)
-        top.pack(pady=(52, 0))
+        top.pack(pady=(36, 0))
         tk.Label(top, text="⬡", font=("Inter", 38),
                  bg=BG, fg=ACCENT).pack()
         tk.Label(top, text="Oasis Scan", font=("Inter", 21, "bold"),
@@ -205,6 +208,8 @@ class ScanFrame(tk.Frame):
         threading.Thread(target=self._run, daemon=True).start()
 
     def _build(self):
+        _topbar(self, subtitle="Scanning…")
+
         center = tk.Frame(self, bg=BG)
         center.place(relx=0.5, rely=0.5, anchor="center")
 
@@ -287,18 +292,11 @@ class ResultFrame(tk.Frame):
         self._build()
 
     def _build(self):
-        # Top bar
-        bar = tk.Frame(self, bg=PANEL)
-        bar.pack(fill="x")
-        b = tk.Frame(bar, bg=PANEL)
-        b.pack(fill="x", padx=20, pady=13)
-        tk.Label(b, text="⬡  Oasis Scan",
-                 font=("Inter", 13, "bold"), bg=PANEL, fg=TEXT).pack(side="left")
-        tk.Label(b, text="✓ Synced to cloud",
-                 font=("Inter", 9), bg=PANEL, fg=OK).pack(side="right")
-        tk.Label(b, text=self._email,
-                 font=("Inter", 9), bg=PANEL, fg=TSEC).pack(side="right", padx=14)
-        tk.Frame(self, bg=BORDER, height=1).pack(fill="x")
+        bar = _topbar(self, subtitle=self._email)
+        # Add "synced" chip to the existing bar's inner frame
+        inner = bar.winfo_children()[0]   # the inner Frame
+        tk.Label(inner, text="✓ Synced",
+                 font=("Inter", 9), bg=PANEL, fg=OK).pack(side="right", padx=(0, 8))
 
         # Scrollable body
         wrap = tk.Frame(self, bg=BG)
@@ -393,6 +391,34 @@ class ResultFrame(tk.Frame):
         Btn(p, "Run Another Scan",
             lambda: self.master._switch(ScanFrame, self._email)
         ).pack(padx=20, pady=(0, 24), fill="x")
+
+
+# ── Shared top-bar ────────────────────────────────────────────────────────────
+
+def _topbar(parent: tk.Frame, subtitle: str = "") -> tk.Frame:
+    """Renders a slim header with logo, optional subtitle, and a close button."""
+    bar = tk.Frame(parent, bg=PANEL, highlightbackground=BORDER, highlightthickness=0)
+    bar.pack(fill="x")
+    inner = tk.Frame(bar, bg=PANEL)
+    inner.pack(fill="x", padx=16, pady=10)
+
+    left = tk.Frame(inner, bg=PANEL)
+    left.pack(side="left", fill="x", expand=True)
+    tk.Label(left, text="⬡  Oasis Scan", font=("Inter", 12, "bold"),
+             bg=PANEL, fg=TEXT).pack(side="left")
+    if subtitle:
+        tk.Label(left, text=subtitle, font=("Inter", 9),
+                 bg=PANEL, fg=TSEC, padx=10).pack(side="left")
+
+    close = tk.Button(inner, text="✕", font=("Inter", 11),
+                      bg=PANEL, fg=TMUT, activebackground=PANEL,
+                      activeforeground=ERR, relief="flat", bd=0,
+                      cursor="hand2", padx=4,
+                      command=parent.master.destroy)
+    close.pack(side="right")
+
+    tk.Frame(parent, bg=BORDER, height=1).pack(fill="x")
+    return bar
 
 
 # ── Widget helpers ─────────────────────────────────────────────────────────────
