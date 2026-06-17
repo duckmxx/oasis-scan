@@ -896,6 +896,27 @@ ul { list-style: none; }
   text-overflow: ellipsis;
 }
 
+.device-card-critical { border-color: rgba(255,56,96,0.35); }
+.device-card-high     { border-color: rgba(255,107,53,0.35); }
+
+.device-vuln-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-height: 22px;
+}
+
+.device-clean {
+  font-size: 10px;
+  color: var(--sev-low);
+}
+
+.device-no-cve-data {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
 .device-footer {
   display: flex;
   align-items: center;

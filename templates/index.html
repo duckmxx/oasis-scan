@@ -508,8 +508,23 @@
           const memTotalGB = d.mem_total ? (d.mem_total / (1024 ** 3)).toFixed(1) + ' GiB' : '?';
           const distroIcon = { arch: '🐧', debian: '🐧', rhel: '🎩' }[d.distro_family] ?? '🖥';
 
+          // CVE badge row (only shown if a CVE scan has been run)
+          const hasCveData  = d.critical !== undefined;
+          const crit        = d.critical ?? 0;
+          const high        = d.high     ?? 0;
+          const other       = d.other    ?? 0;
+          const vulnBadges  = hasCveData
+            ? `<div class="device-vuln-row">
+                ${crit  > 0 ? `<span class="badge badge-critical">${crit} crit</span>`   : ''}
+                ${high  > 0 ? `<span class="badge badge-high">${high} high</span>`        : ''}
+                ${other > 0 ? `<span class="badge badge-medium">${other} med/low</span>` : ''}
+                ${(crit + high + other) === 0
+                  ? '<span class="device-clean">✓ No known CVEs</span>' : ''}
+               </div>`
+            : '<div class="device-vuln-row"><span class="device-no-cve-data">Run scan to check CVEs</span></div>';
+
           const card = document.createElement('div');
-          card.className = 'device-card';
+          card.className = 'device-card' + (crit > 0 ? ' device-card-critical' : high > 0 ? ' device-card-high' : '');
           card.innerHTML = `
             <div class="device-card-header">
               <div class="device-icon">${distroIcon}</div>
@@ -536,6 +551,7 @@
                 <div class="device-stat-value">${escHtml(String(d.pkg_count ?? '?'))}</div>
               </div>
             </div>
+            ${vulnBadges}
             <div class="device-footer">
               <span class="device-kernel">${escHtml(d.kernel ?? '—')}</span>
               <span class="device-last-scan">Last scan: ${escHtml(scanDate)}</span>
