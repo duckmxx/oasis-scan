@@ -1,9 +1,15 @@
+import getpass
 import json
 import os
 import platform
 import shutil
 import subprocess
+import urllib.request
+import urllib.error
 from datetime import datetime, timezone
+
+FIREBASE_API_KEY = "AIzaSyBr8FSPpcVtuinCm-iWKicEl_CP3JTP80o"
+FIREBASE_PROJECT  = "oasis-scanner-c988d"
 
 ARCH_BASED = {"arch", "artix", "manjaro", "endeavouros", "cachyos", "garuda", "arcolinux", "parabola"}
 DEBIAN_BASED = {"debian", "ubuntu", "linuxmint", "pop", "kali", "raspbian"}
@@ -415,16 +421,93 @@ def scan():
     return report
 
 
+def firebase_login(email, password):
+    url = f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key={FIREBASE_API_KEY}"
+    body = json.dumps({"email": email, "password": password, "returnSecureToken": True}).encode()
+    req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req) as resp:
+            data = json.loads(resp.read())
+            return data["idToken"], data["localId"]
+    except urllib.error.HTTPError as e:
+        err = json.loads(e.read()).get("error", {}).get("message", "UNKNOWN")
+        return None, err
+
+
+def firestore_save(id_token, uid, report):
+    url = (f"https://firestore.googleapis.com/v1/projects/{FIREBASE_PROJECT}"
+           f"/databases/(default)/documents/users/{uid}/scans")
+    # Build a minimal Firestore document with the key device fields
+    os_info = report["os"]
+    mem = report["memory"]["summary"]
+    cpu = report["cpu"]["summary"]
+    doc = {
+        "fields": {
+            "scanned_at":   {"stringValue": report["scanned_at"]},
+            "hostname":     {"stringValue": os_info.get("hostname", "")},
+            "os":           {"stringValue": os_info.get("pretty_name", "")},
+            "kernel":       {"stringValue": os_info.get("release", "")},
+            "arch":         {"stringValue": os_info.get("machine", "")},
+            "cpu":          {"stringValue": cpu.get("model_name", "")},
+            "cpu_cores":    {"integerValue": str(cpu.get("logical_cpus", 0))},
+            "mem_total":    {"integerValue": str(mem.get("total_bytes") or 0)},
+            "mem_available":{"integerValue": str(mem.get("available_bytes") or 0)},
+            "pkg_count":    {"integerValue": str(report["packages"].get("count") or 0)},
+            "pkg_manager":  {"stringValue": report["packages"].get("manager", "")},
+            "services_running": {"integerValue": str(len(report["services"].get("running", [])))},
+            "suid_count":   {"integerValue": str(len(report["suid_files"]))},
+            "distro_family":{"stringValue": report.get("distro_family", "")},
+        }
+    }
+    body = json.dumps(doc).encode()
+    req = urllib.request.Request(url, data=body, headers={
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {id_token}",
+    })
+    try:
+        with urllib.request.urlopen(req) as resp:
+            return True, None
+    except urllib.error.HTTPError as e:
+        return False, e.read().decode()
+
+
+def prompt_login():
+    print("\n── Oasis Scan ─────────────────────────────")
+    print("  Sign in to sync results to your account")
+    print("───────────────────────────────────────────")
+    email    = input("  Email   : ").strip()
+    password = getpass.getpass("  Password: ")
+    print("  Authenticating…", end="", flush=True)
+    token, result = firebase_login(email, password)
+    if token:
+        print(" done")
+        return token, result  # result is uid
+    else:
+        print(f" failed ({result})")
+        return None, None
+
+
 def main():
+    id_token, uid = prompt_login()
+    if not id_token:
+        print("Could not sign in. Running scan without syncing.\n")
+
     report = scan()
+
     out_path = os.environ.get("OASIS_REPORT", "oasis-report.json")
     try:
         with open(out_path, "w") as f:
             json.dump(report, f, indent=2, default=str)
     except OSError as e:
         print(f"warn: could not write {out_path}: {e}")
+
     print_summary(report)
     print(f"\nFull report written to: {out_path}")
+
+    if id_token and uid:
+        print("Syncing to Firestore…", end="", flush=True)
+        ok, err = firestore_save(id_token, uid, report)
+        print(" done" if ok else f" failed: {err}")
 
 
 if __name__ == "__main__":

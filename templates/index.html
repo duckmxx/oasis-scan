@@ -51,6 +51,15 @@
       </li>
     </ul>
 
+    <div class="sidebar-user" id="sidebar-user" style="display:none">
+      <div class="user-avatar" id="user-avatar">??</div>
+      <div class="user-info">
+        <div class="user-name" id="user-display-name">—</div>
+        <div class="user-email-small" id="user-uid-label">—</div>
+        <div class="user-provider" id="user-provider-label">—</div>
+      </div>
+    </div>
+
     <div class="sidebar-footer" id="sidebar-last-scan">
       Last scan: <span class="text-accent mono" id="last-scan-time">—</span>
     </div>
@@ -351,6 +360,109 @@
     </div>
   </div>
 
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/11.8.1/firebase-app.js";
+    import { getAuth, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/11.8.1/firebase-auth.js";
+    import { getFirestore, collection, addDoc, getDocs, orderBy, query, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.8.1/firebase-firestore.js";
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyBr8FSPpcVtuinCm-iWKicEl_CP3JTP80o",
+      authDomain: "oasis-scanner-c988d.firebaseapp.com",
+      projectId: "oasis-scanner-c988d",
+      storageBucket: "oasis-scanner-c988d.firebasestorage.app",
+      messagingSenderId: "661728874468",
+      appId: "1:661728874468:web:961e64b143b60f6dc881f1"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+    const db   = getFirestore(app);
+
+    window.__db   = db;
+    window.__auth = auth;
+
+    onAuthStateChanged(auth, user => {
+      if (!user) {
+        window.location.href = '/login';
+        return;
+      }
+
+      // Topbar: email chip + sign-out (insert once)
+      const rightEl = document.querySelector('.topbar-right');
+      if (rightEl && !document.getElementById('user-chip')) {
+        const userChip = document.createElement('span');
+        userChip.id = 'user-chip';
+        userChip.style.cssText = 'font-size:12px;color:var(--text-secondary);';
+        userChip.textContent = user.email;
+
+        const logoutBtn = document.createElement('button');
+        logoutBtn.className = 'btn btn-ghost btn-sm';
+        logoutBtn.textContent = 'Sign out';
+        logoutBtn.addEventListener('click', () => signOut(auth));
+
+        rightEl.prepend(logoutBtn);
+        rightEl.prepend(userChip);
+      }
+
+      // Sidebar user card
+      const sidebarUser = document.getElementById('sidebar-user');
+      if (sidebarUser) {
+        sidebarUser.style.display = '';
+        const provider = user.providerData[0]?.providerId === 'google.com' ? 'Google' : 'Email / Password';
+        const initials = (user.displayName ?? user.email ?? '?').slice(0, 2).toUpperCase();
+        const created  = user.metadata.creationTime
+          ? new Date(user.metadata.creationTime).toLocaleDateString() : '—';
+
+        document.getElementById('user-avatar').textContent        = initials;
+        document.getElementById('user-display-name').textContent  = user.displayName || user.email;
+        document.getElementById('user-uid-label').textContent     = 'UID: ' + user.uid.slice(0, 14) + '…';
+        document.getElementById('user-provider-label').textContent = provider + ' · ' + created;
+      }
+
+      // Load scan history from Firestore
+      loadScanHistory(user.uid);
+    });
+
+    async function loadScanHistory(uid) {
+      try {
+        const q = query(collection(db, 'users', uid, 'scans'), orderBy('createdAt', 'desc'));
+        const snap = await getDocs(q);
+        const historyEl = document.querySelector('#section-history .panel-body');
+        if (!historyEl) return;
+        if (snap.empty) return;
+
+        historyEl.innerHTML = '';
+        const table = document.createElement('table');
+        table.className = 'cve-table';
+        table.innerHTML = `<thead><tr><th>Date</th><th>Critical</th><th>High</th><th>Medium/Low</th><th>Apps</th></tr></thead><tbody></tbody>`;
+        const tbody = table.querySelector('tbody');
+        snap.forEach(doc => {
+          const d = doc.data();
+          const date = d.createdAt?.toDate?.()?.toLocaleString() ?? '—';
+          const tr = document.createElement('tr');
+          tr.innerHTML = `<td>${date}</td><td class="cvss-critical">${d.critical ?? 0}</td><td class="cvss-high">${d.high ?? 0}</td><td>${d.other ?? 0}</td><td>${d.apps ?? 0}</td>`;
+          tbody.appendChild(tr);
+        });
+        historyEl.appendChild(table);
+      } catch (e) {
+        console.error('Failed to load scan history', e);
+      }
+    }
+
+    // Expose save function so main.js can call it after a scan
+    window.__saveScanResult = async function(result) {
+      const user = auth.currentUser;
+      if (!user) return;
+      try {
+        await addDoc(collection(db, 'users', user.uid, 'scans'), {
+          ...result,
+          createdAt: serverTimestamp()
+        });
+      } catch (e) {
+        console.error('Failed to save scan result', e);
+      }
+    };
+  </script>
   <script src="/static/js/main.js"></script>
 </body>
 </html>
