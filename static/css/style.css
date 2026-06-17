@@ -404,6 +404,106 @@ ul { list-style: none; }
   color: var(--text-secondary);
 }
 
+.stat-card-jump { cursor: pointer; }
+
+/* --- Page section spacing (panels stack with consistent gap) --- */
+.page-section {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+/* --- Overview two-column row --- */
+.overview-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+}
+@media (max-width: 900px) {
+  .overview-row { grid-template-columns: 1fr; }
+}
+
+/* Security posture summary */
+.posture-summary {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 4px 0 16px;
+}
+.posture-icon {
+  width: 38px;
+  height: 38px;
+  flex-shrink: 0;
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  background: var(--bg-hover);
+  border: 1px solid var(--border-accent);
+}
+.posture-summary.posture-ok   .posture-icon { color: var(--sev-low);      border-color: var(--sev-low); }
+.posture-summary.posture-warn .posture-icon { color: var(--sev-critical); border-color: var(--sev-critical); }
+.posture-title { font-size: 13px; font-weight: 700; color: var(--text-primary); }
+.posture-sub   { font-size: 12px; color: var(--text-secondary); margin-top: 3px; }
+
+/* Severity breakdown strip */
+.sev-breakdown {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  border-top: 1px solid var(--border);
+  padding-top: 16px;
+}
+.sev-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+.sev-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+.sev-dot.crit { background: var(--sev-critical); }
+.sev-dot.high { background: var(--sev-high); }
+.sev-dot.med  { background: var(--sev-medium); }
+.sev-dot.low  { background: var(--sev-low); }
+.sev-n   { font-size: 20px; font-weight: 800; font-family: var(--font-mono); line-height: 1.1; }
+.sev-cap { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); }
+
+/* Top vulnerabilities preview rows */
+.ov-cve-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 20px;
+  border-bottom: 1px solid var(--border);
+}
+.ov-cve-row:last-child { border-bottom: none; }
+.ov-cve-row .cvss-score {
+  flex-shrink: 0;
+  min-width: 34px;
+  text-align: center;
+  font-weight: 800;
+}
+.ov-cve-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+.ov-cve-main .cve-id { font-size: 12px; }
+.ov-cve-pkg {
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* =========================================================
    Severity Badges
    ========================================================= */

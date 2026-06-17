@@ -47,9 +47,6 @@
         <span class="nav-icon">⊟</span> Devices
         <span class="nav-badge hidden" id="nav-device-badge">0</span>
       </li>
-      <li class="nav-item" data-section="section-history">
-        <span class="nav-icon">↺</span> Scan History
-      </li>
     </ul>
 
     <div class="sidebar-user" id="sidebar-user" style="display:none">
@@ -111,6 +108,68 @@
           <div class="stat-label">Apps Scanned</div>
           <div class="stat-value text-accent" id="stat-apps">—</div>
           <div class="stat-sub">Installed packages</div>
+        </div>
+        <div class="stat-card stat-card-jump" data-jump="section-devices">
+          <div class="stat-label">Devices</div>
+          <div class="stat-value text-accent" id="stat-devices">—</div>
+          <div class="stat-sub">Registered hosts</div>
+        </div>
+      </div>
+
+      <!-- Posture + top vulns -->
+      <div class="overview-row">
+
+        <!-- Security posture (integrity summary) -->
+        <div class="panel">
+          <div class="panel-header">
+            <div class="panel-title"><span class="icon">🔒</span> Security Posture</div>
+            <button class="btn btn-ghost btn-sm" data-jump="section-integrity">Integrity →</button>
+          </div>
+          <div class="panel-body">
+            <div class="posture-summary" id="overview-integrity">
+              <div class="posture-icon" id="overview-integrity-icon">⬡</div>
+              <div>
+                <div class="posture-title" id="overview-integrity-title">No scan yet</div>
+                <div class="posture-sub" id="overview-integrity-sub">Run a scan to verify package integrity and check for malicious packages.</div>
+              </div>
+            </div>
+            <div class="sev-breakdown" id="overview-sev-breakdown">
+              <div class="sev-cell"><span class="sev-dot crit"></span><span class="sev-n cvss-critical" id="ov-sev-critical">—</span><span class="sev-cap">Critical</span></div>
+              <div class="sev-cell"><span class="sev-dot high"></span><span class="sev-n cvss-high" id="ov-sev-high">—</span><span class="sev-cap">High</span></div>
+              <div class="sev-cell"><span class="sev-dot med"></span><span class="sev-n cvss-medium" id="ov-sev-medium">—</span><span class="sev-cap">Medium</span></div>
+              <div class="sev-cell"><span class="sev-dot low"></span><span class="sev-n" id="ov-sev-low">—</span><span class="sev-cap">Low</span></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Top vulnerabilities preview -->
+        <div class="panel">
+          <div class="panel-header">
+            <div class="panel-title"><span class="icon">⚠</span> Top Vulnerabilities</div>
+            <button class="btn btn-ghost btn-sm" data-jump="section-cves">View all →</button>
+          </div>
+          <div class="panel-body no-pad">
+            <div id="overview-top-cves">
+              <div class="empty-state">
+                <div class="empty-icon">⬡</div>
+                <div>No CVEs yet — run a scan to detect vulnerabilities.</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Recent scans (moved from the old Scan History tab) -->
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title"><span class="icon">↺</span> Recent Scans</div>
+        </div>
+        <div class="panel-body" id="overview-history">
+          <div class="empty-state">
+            <div class="empty-icon">↺</div>
+            <div>No scans recorded yet — run a scan to start building history.</div>
+          </div>
         </div>
       </div>
 
@@ -365,23 +424,6 @@
       </div>
     </section>
 
-    <!-- ===================================================
-         SECTION: SCAN HISTORY  (stub)
-         =================================================== -->
-    <section class="page-section hidden" id="section-history">
-      <div class="panel">
-        <div class="panel-header">
-          <div class="panel-title"><span class="icon">↺</span> Scan History</div>
-        </div>
-        <div class="panel-body">
-          <div class="empty-state">
-            <div class="empty-icon">↺</div>
-            <div>Scan history will appear here.</div>
-          </div>
-        </div>
-      </div>
-    </section>
-
   </main>
 
   <!-- =====================================================
@@ -465,20 +507,23 @@
       try {
         const q = query(collection(db, 'users', uid, 'scans'), orderBy('createdAt', 'desc'));
         const snap = await getDocs(q);
-        const historyEl = document.querySelector('#section-history .panel-body');
+        const historyEl = document.getElementById('overview-history');
         if (!historyEl) return;
         if (snap.empty) return;
 
+        historyEl.classList.add('no-pad');
         historyEl.innerHTML = '';
         const table = document.createElement('table');
         table.className = 'cve-table';
-        table.innerHTML = `<thead><tr><th>Date</th><th>Critical</th><th>High</th><th>Medium/Low</th><th>Apps</th></tr></thead><tbody></tbody>`;
+        table.innerHTML = `<thead><tr><th>Date</th><th>Host</th><th>Critical</th><th>High</th><th>Medium/Low</th><th>Apps</th></tr></thead><tbody></tbody>`;
         const tbody = table.querySelector('tbody');
         snap.forEach(doc => {
           const d = doc.data();
           const date = d.createdAt?.toDate?.()?.toLocaleString() ?? '—';
+          const host = d.hostname || '—';
+          const apps = d.apps ?? d.pkg_count ?? 0;
           const tr = document.createElement('tr');
-          tr.innerHTML = `<td>${date}</td><td class="cvss-critical">${d.critical ?? 0}</td><td class="cvss-high">${d.high ?? 0}</td><td>${d.other ?? 0}</td><td>${d.apps ?? 0}</td>`;
+          tr.innerHTML = `<td>${date}</td><td class="mono" style="font-size:11px">${host}</td><td class="cvss-critical">${d.critical ?? 0}</td><td class="cvss-high">${d.high ?? 0}</td><td>${d.other ?? 0}</td><td>${apps}</td>`;
           tbody.appendChild(tr);
         });
         historyEl.appendChild(table);
@@ -511,6 +556,8 @@
         // Update badge + count
         if (badge)  { badge.textContent = devices.size; badge.classList.remove('hidden'); }
         if (count)  count.textContent = `${devices.size} device${devices.size !== 1 ? 's' : ''}`;
+        const devStat = document.getElementById('stat-devices');
+        if (devStat) devStat.textContent = devices.size;
 
         // Cache device data so main.js modal + map can access it
         window.__deviceCache = Object.fromEntries(devices);

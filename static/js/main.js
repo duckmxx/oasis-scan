@@ -57,6 +57,14 @@ document.querySelectorAll('.nav-item[data-section]').forEach(item => {
   });
 });
 
+/* --- Overview jump-links: clicking a card/button activates the matching tab --- */
+document.querySelectorAll('[data-jump]').forEach(el => {
+  el.addEventListener('click', () => {
+    const navItem = document.querySelector(`.nav-item[data-section="${el.dataset.jump}"]`);
+    if (navItem) navItem.click();
+  });
+});
+
 /* --- Severity filter chips --- */
 document.querySelectorAll('.filter-chip').forEach(chip => {
   chip.addEventListener('click', () => {
@@ -299,6 +307,16 @@ function populateIntegrity(data) {
     if (sub)    sub.textContent   = 'Review the tables below for details.';
   }
 
+  // Mirror the headline onto the Overview "Security Posture" panel
+  const ovBox   = document.getElementById('overview-integrity');
+  const ovIcon  = document.getElementById('overview-integrity-icon');
+  const ovTitle = document.getElementById('overview-integrity-title');
+  const ovSub   = document.getElementById('overview-integrity-sub');
+  if (ovBox) ovBox.className = 'posture-summary ' + (sum.clean ? 'posture-ok' : 'posture-warn');
+  if (ovIcon)  ovIcon.textContent  = icon ? icon.textContent : (sum.clean ? '✓' : '⚠');
+  if (ovTitle) ovTitle.textContent = title ? title.textContent : '';
+  if (ovSub)   ovSub.textContent   = sub ? sub.textContent : '';
+
   // Nav badge (show if any real issue found)
   const navBadge = document.getElementById('nav-integrity-badge');
   const issueCount = sum.file_issues + sum.malicious_pkgs;
@@ -440,6 +458,48 @@ function _populateApps(pkgList, foreignList, totalCount, manager, suffix) {
   }
 }
 
+/* --- Overview: severity breakdown + top vulnerabilities preview --- */
+
+function populateOverviewCVEs(cves, counts) {
+  counts = counts ?? {};
+  setText('ov-sev-critical', counts.critical ?? 0);
+  setText('ov-sev-high',     counts.high     ?? 0);
+  setText('ov-sev-medium',   counts.medium   ?? 0);
+  setText('ov-sev-low',      counts.low      ?? 0);
+
+  const box = document.getElementById('overview-top-cves');
+  if (!box) return;
+
+  const order = { critical: 0, high: 1, medium: 2, low: 3, unknown: 4 };
+  const top = [...(cves ?? [])]
+    .sort((a, b) => {
+      const s = (order[a.severity] ?? 4) - (order[b.severity] ?? 4);
+      return s !== 0 ? s : (Number(b.cvss) || 0) - (Number(a.cvss) || 0);
+    })
+    .slice(0, 5);
+
+  if (top.length === 0) {
+    box.innerHTML = `<div class="empty-state">
+      <div class="empty-icon" style="color:var(--sev-low)">✓</div>
+      <div>No known vulnerabilities found.</div>
+    </div>`;
+    return;
+  }
+
+  box.innerHTML = top.map(c => {
+    const sev   = c.severity || 'unknown';
+    const score = c.cvss != null ? Number(c.cvss).toFixed(1) : '—';
+    return `<div class="ov-cve-row">
+      <span class="cvss-score cvss-${sev}">${score}</span>
+      <div class="ov-cve-main">
+        <span class="cve-id mono">${escapeHtml(c.id)}</span>
+        <span class="ov-cve-pkg">${escapeHtml(c.package)}</span>
+      </div>
+      <span class="badge badge-${sev}">${sev}</span>
+    </div>`;
+  }).join('');
+}
+
 /* --- Populate CVE data once analysis returns --- */
 
 function populateCVEs(cves, counts) {
@@ -447,6 +507,9 @@ function populateCVEs(cves, counts) {
   setText('stat-critical', counts.critical ?? 0);
   setText('stat-high',     counts.high     ?? 0);
   setText('stat-other',    (counts.medium  ?? 0) + (counts.low ?? 0));
+
+  // Overview: severity breakdown + top vulnerabilities preview
+  populateOverviewCVEs(cves, counts);
 
   // Nav badge (critical + high only)
   const badge = document.getElementById('nav-cve-badge');
