@@ -87,6 +87,15 @@ def _arch_cves(packages: list[dict]) -> list[dict]:
                     continue
                 seen.add(key)
 
+                # CVE IDs have a direct Arch tracker page; non-CVE advisory IDs
+                # use the advisory path.  NVD is always a reliable fallback.
+                if cve_id.startswith("CVE-"):
+                    cve_url = f"https://security.archlinux.org/{cve_id}"
+                elif adv_name:
+                    cve_url = f"https://security.archlinux.org/advisory/{adv_name}"
+                else:
+                    cve_url = ""
+
                 result.append({
                     "id":        cve_id,
                     "package":   pkg_name,
@@ -95,7 +104,7 @@ def _arch_cves(packages: list[dict]) -> list[dict]:
                     "severity":  severity,
                     "cvss":      None,
                     "summary":   summary,
-                    "url":       f"https://security.archlinux.org/advisory/{adv_name}",
+                    "url":       cve_url,
                 })
 
     result.sort(key=lambda x: _SEV_ORDER.get(x["severity"], 4))

@@ -593,9 +593,19 @@ function populateCVEs(cves, counts) {
             return;
           }
           const d       = row.dataset;
+          const cveId   = d.cveId || '';
           const summary = d.cveSummary || 'No description available.';
-          const url     = d.cveUrl ||
-            (d.cveId?.startsWith('CVE-') ? `https://nvd.nist.gov/vuln/detail/${d.cveId}` : '');
+
+          // Build reliable links — never trust the stored URL alone for Arch CVEs
+          // because the advisory URL format changes; derive fresh links from the ID.
+          const isCVE    = cveId.startsWith('CVE-');
+          const isASA    = cveId.startsWith('ASA-');
+          const nvdUrl   = isCVE ? `https://nvd.nist.gov/vuln/detail/${cveId}` : '';
+          const archUrl  = isCVE ? `https://security.archlinux.org/${cveId}`
+                         : isASA ? `https://security.archlinux.org/advisory/${cveId}`
+                         : (d.cveUrl || '');
+          const osvUrl   = d.cveUrl?.startsWith('https://osv.dev') ? d.cveUrl : '';
+
           const detail  = document.createElement('tr');
           detail.className = 'cve-detail-row';
           detail.innerHTML = `
@@ -609,10 +619,11 @@ function populateCVEs(cves, counts) {
                   <span>CVSS <code>${escapeHtml(d.cveCvss)}</code></span>
                 </div>
                 <div class="cve-detail-actions">
-                  ${url ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener"
-                      class="btn btn-ghost btn-sm">View Advisory ↗</a>` : ''}
+                  ${nvdUrl  ? `<a href="${nvdUrl}"  target="_blank" rel="noopener" class="btn btn-ghost btn-sm">NVD ↗</a>` : ''}
+                  ${archUrl ? `<a href="${archUrl}" target="_blank" rel="noopener" class="btn btn-ghost btn-sm">Arch ↗</a>` : ''}
+                  ${osvUrl  ? `<a href="${osvUrl}"  target="_blank" rel="noopener" class="btn btn-ghost btn-sm">OSV ↗</a>` : ''}
                   <button class="btn btn-ghost btn-sm"
-                    onclick="navigator.clipboard.writeText('${escapeHtml(d.cveId)}').then(()=>{this.textContent='Copied!';setTimeout(()=>this.textContent='Copy ID',1500)})">
+                    onclick="navigator.clipboard.writeText('${escapeHtml(cveId)}').then(()=>{this.textContent='Copied!';setTimeout(()=>this.textContent='Copy ID',1500)})">
                     Copy ID
                   </button>
                 </div>
@@ -767,13 +778,20 @@ window.__openDeviceModal = function(d) {
           <thead><tr><th>ID</th><th>Package</th><th>Sev.</th><th>CVSS</th><th></th></tr></thead>
           <tbody>
             ${cves.slice(0, 10).map(c => {
-              const advUrl = c.url || (c.id?.startsWith('CVE-') ? `https://nvd.nist.gov/vuln/detail/${c.id}` : '');
+              const id    = c.id || '';
+              const nvd   = id.startsWith('CVE-') ? `https://nvd.nist.gov/vuln/detail/${id}` : '';
+              const arch  = id.startsWith('CVE-') ? `https://security.archlinux.org/${id}`
+                          : id.startsWith('ASA-') ? `https://security.archlinux.org/advisory/${id}` : '';
+              const links = [
+                nvd  ? `<a href="${escapeHtml(nvd)}"  target="_blank" rel="noopener" style="margin-right:4px;font-size:10px" class="btn btn-ghost btn-sm">NVD</a>`  : '',
+                arch ? `<a href="${escapeHtml(arch)}" target="_blank" rel="noopener" style="font-size:10px" class="btn btn-ghost btn-sm">Arch</a>` : '',
+              ].join('');
               return `<tr>
-                <td class="mono" style="font-size:11px">${escapeHtml(c.id)}</td>
+                <td class="mono" style="font-size:11px">${escapeHtml(id)}</td>
                 <td>${escapeHtml(c.package)}</td>
                 <td><span class="badge badge-${c.severity}">${c.severity}</span></td>
                 <td class="cvss-score cvss-${c.severity}">${c.cvss != null ? Number(c.cvss).toFixed(1) : '—'}</td>
-                <td>${advUrl ? `<a href="${escapeHtml(advUrl)}" target="_blank" rel="noopener" class="btn btn-ghost btn-sm" style="font-size:10px;padding:2px 6px">↗</a>` : ''}</td>
+                <td style="white-space:nowrap">${links || '—'}</td>
               </tr>`;
             }).join('')}
           </tbody>
