@@ -593,6 +593,10 @@ class NetworkFrame(tk.Frame):
                    + (f" · {s['failed']} failed" if s.get("failed") else ""))
             tk.Label(self, text=sub, font=F_SMALL, bg=BG, fg=TMUT,
                      anchor="w").pack(fill="x", padx=28, pady=(0, 6))
+            if s.get("error"):
+                tk.Label(self, text=f"Sync error: {s['error']}", font=F_SMALL,
+                         bg=BG, fg=ERR, anchor="w", wraplength=440, justify="left"
+                         ).pack(fill="x", padx=28, pady=(0, 6))
 
         tk.Frame(self, bg=BORDER, height=1).pack(fill="x", padx=28, pady=(0, 4))
 

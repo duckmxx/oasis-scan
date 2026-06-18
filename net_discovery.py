@@ -567,8 +567,12 @@ def _fetch_first_seen(id_token: str, uid: str, doc_id: str):
         return None
 
 
-def _patch_device(id_token: str, uid: str, doc_id: str, fields: dict) -> bool:
-    """Create/overwrite a device document via Firestore PATCH (upsert)."""
+def _patch_device(id_token: str, uid: str, doc_id: str, fields: dict):
+    """Create/overwrite a device document via Firestore PATCH (upsert).
+
+    Returns (ok, error_detail) so the caller can surface *why* a write failed
+    (e.g. '403: Missing or insufficient permissions' = a security-rules problem).
+    """
     url = _device_url(uid, doc_id)
     body = json.dumps({"fields": fields}).encode()
     req = urllib.request.Request(
@@ -577,9 +581,15 @@ def _patch_device(id_token: str, uid: str, doc_id: str, fields: dict) -> bool:
                  "Authorization": f"Bearer {id_token}"})
     try:
         with urllib.request.urlopen(req, timeout=10):
-            return True
-    except Exception:
-        return False
+            return True, None
+    except urllib.error.HTTPError as e:
+        try:
+            detail = e.read().decode("utf-8", "replace")
+        except Exception:
+            detail = ""
+        return False, f"HTTP {e.code}: {detail[:400]}"
+    except Exception as e:
+        return False, str(e)
 
 
 def save_devices(id_token: str, uid: str, devices: list) -> dict:
@@ -592,9 +602,10 @@ def save_devices(id_token: str, uid: str, devices: list) -> dict:
     Mirrors scanner.firestore_save's REST/auth approach. Returns a summary dict
     {created, updated, failed}; never raises.
     """
-    summary = {"created": 0, "updated": 0, "failed": 0}
+    summary = {"created": 0, "updated": 0, "failed": 0, "error": None}
     if not id_token or not uid or not FIREBASE_PROJECT:
         summary["failed"] = len(devices)
+        summary["error"] = "missing id_token / uid / FIREBASE_PROJECT"
         return summary
 
     for d in devices:
@@ -605,13 +616,17 @@ def save_devices(id_token: str, uid: str, devices: list) -> dict:
             if existing_first_seen:
                 # Preserve original first_seen, refresh everything else.
                 fields["first_seen"] = {"stringValue": existing_first_seen}
-                ok = _patch_device(id_token, uid, doc_id, fields)
-                summary["updated" if ok else "failed"] += 1
+            ok, err = _patch_device(id_token, uid, doc_id, fields)
+            if ok:
+                summary["updated" if existing_first_seen else "created"] += 1
             else:
-                ok = _patch_device(id_token, uid, doc_id, fields)
-                summary["created" if ok else "failed"] += 1
-        except Exception:
+                summary["failed"] += 1
+                if err and not summary["error"]:
+                    summary["error"] = err
+        except Exception as e:
             summary["failed"] += 1
+            if not summary["error"]:
+                summary["error"] = str(e)
     return summary
 
 
@@ -621,3 +636,48 @@ def discover_and_save(id_token: str, uid: str, subnet: str | None = None,
     devices = discover(subnet, progress=progress)
     summary = save_devices(id_token, uid, devices)
     return devices, summary
+
+
+# ── Standalone diagnostics ────────────────────────────────────────────────────
+# Discover only:        python net_discovery.py
+# Test the Firestore write end-to-end (prints the exact error on failure):
+#                       python net_discovery.py <email> <password>
+if __name__ == "__main__":
+    import sys
+
+    if len(sys.argv) >= 3:
+        email, password = sys.argv[1], sys.argv[2]
+        try:
+            from scanner import firebase_login
+        except Exception as e:
+            print("Could not import firebase_login from scanner:", e)
+            sys.exit(1)
+
+        print(f"Project: {FIREBASE_PROJECT!r}")
+        print(f"Logging in as {email} …")
+        token, uid = firebase_login(email, password)
+        if not token:
+            print("LOGIN FAILED:", uid)
+            sys.exit(1)
+        print("Login OK. uid =", uid)
+
+        test_device = {
+            "ip": "10.255.255.254", "mac": "00:00:5e:00:53:af", "vendor": "SELFTEST",
+            "device_type": "PC/Server", "os_guess": "Linux", "os_details": "",
+            "hostname": "netdiscovery-selftest", "open_ports": [], "services": [],
+            "source": "selftest", "first_seen": _now_iso(), "last_seen": _now_iso(),
+        }
+        print(f"Writing 1 test device to users/{uid}/network_devices/ …")
+        result = save_devices(token, uid, [test_device])
+        print("RESULT:", result)
+        if result.get("error"):
+            print("\n>>> WRITE FAILED. The error above tells us why.")
+            print(">>> '403 / PERMISSION_DENIED' means Firestore security rules block")
+            print(">>> writes to users/{uid}/network_devices. '401' means the token expired.")
+        else:
+            print("\n>>> WRITE OK. Refresh the dashboard Devices tab — the self-test")
+            print(">>> device should appear. (You can delete it from Firestore after.)")
+    else:
+        print(f"Subnet: {detect_subnet()}")
+        for d in discover():
+            print(d)
