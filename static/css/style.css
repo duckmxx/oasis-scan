@@ -2641,3 +2641,28 @@ ul { list-style: none; }
 /* Attack narrative: cached-or-generate hint (no auto AI spend) */
 .attack-hint { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; color: var(--text-secondary); font-size: 13px; }
 .attack-hint p { flex-basis: 100%; margin: 0 0 4px; }
+
+/* ── Patchability status + warnings ─────────────────────────────────── */
+.patch-status {
+  font-size: 10px; font-weight: 700; letter-spacing: 0.03em;
+  padding: 2px 7px; border-radius: 4px; white-space: nowrap;
+  font-family: var(--font-mono);
+}
+.patch-status-checking { color: var(--text-muted); border: 1px solid var(--border); }
+.patch-status-ok    { color: var(--sev-low);      background: rgba(39,201,63,0.12);  border: 1px solid rgba(39,201,63,0.3); }
+.patch-status-warn  { color: var(--sev-medium);   background: rgba(245,166,35,0.12);  border: 1px solid rgba(245,166,35,0.3); }
+.patch-status-crit  { color: var(--sev-critical); background: rgba(255,56,96,0.12);   border: 1px solid rgba(255,56,96,0.32); }
+.patch-status-muted { color: var(--text-muted);   border: 1px solid var(--border); }
+.patch-warn {
+  display: flex; align-items: center; gap: 9px;
+  padding: 9px 16px; font-size: 12px; line-height: 1.45;
+  color: var(--text-secondary);
+  background: rgba(245,166,35,0.07);
+  border-bottom: 1px solid var(--border);
+}
+.patch-item-warn.patch-item { border-color: rgba(245,166,35,0.35); }
+.patch-warn-icon {
+  flex-shrink: 0; width: 16px; height: 16px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 700; color: #08090e; background: var(--sev-medium);
+}

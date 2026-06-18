@@ -15,6 +15,7 @@ except ImportError:
 from scanner import scan as run_scan, get_nmap_scan
 from cve_lookup import lookup_cves
 from integrity_check import run_integrity
+from patchability import assess_patchability
 from config import (
     FIREBASE_API_KEY, FIREBASE_AUTH_DOMAIN, FIREBASE_PROJECT,
     FIREBASE_STORAGE_BUCKET, FIREBASE_MESSAGING_ID, FIREBASE_APP_ID,
@@ -69,6 +70,18 @@ def api_analyze():
             s = c.get("severity", "unknown")
             counts[s] = counts.get(s, 0) + 1
         return flask.jsonify({"ok": True, "cves": cves, "counts": counts})
+    except Exception as e:
+        return flask.jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/patchability", methods=["POST"])
+def api_patchability():
+    """Assess whether each vulnerable package actually has an installable fix."""
+    try:
+        body   = flask.request.get_json(force=True) or {}
+        report = body.get("report") or {}
+        cves   = body.get("cves") or []
+        return flask.jsonify({"ok": True, "packages": assess_patchability(report, cves)})
     except Exception as e:
         return flask.jsonify({"ok": False, "error": str(e)}), 500
 

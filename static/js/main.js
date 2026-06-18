@@ -1322,10 +1322,12 @@ function renderPatches() {
           <label class="patch-check"><input type="checkbox" class="patch-done-cb" ${isDone ? 'checked' : ''}></label>
           <span class="patch-pkg-name">${escapeHtml(g.pkg)}</span>
           <span class="badge badge-${sev}">${sev}</span>
+          <span class="patch-status patch-status-checking">checking repo…</span>
           <span class="patch-count">${g.cves.length} CVE${g.cves.length !== 1 ? 's' : ''}</span>
           <span class="patch-fix-ver">${g.fixed && g.fixed !== '?'
             ? `fix → <code class="text-ok">${escapeHtml(g.fixed)}</code>` : '<span class="text-muted">no fixed version</span>'}</span>
         </div>
+        <div class="patch-warn" style="display:none"></div>
         <div class="patch-cve-list">${chips}</div>
         <div class="patch-cmd-block">
           <code>${escapeHtml(cmd)}</code>
@@ -1344,6 +1346,63 @@ function renderPatches() {
 
   _wirePatchItems(list, host, family);
   _updatePatchBadge();
+  _loadPatchability();
+}
+
+/* --- Patchability: is each package's fix actually available? (backend check) --- */
+
+const _PATCH_STATUS = {
+  patchable:     { label: 'Patchable',      cls: 'patch-status-ok',    warn: false },
+  already_fixed: { label: 'Already fixed',  cls: 'patch-status-muted', warn: false },
+  fix_pending:   { label: 'Fix not in repo', cls: 'patch-status-warn', warn: true },
+  no_fix:        { label: 'No fix yet',      cls: 'patch-status-crit', warn: true },
+  unknown:       { label: '—',               cls: 'patch-status-muted', warn: false },
+};
+
+async function _loadPatchability() {
+  const { cves, family } = _patchContext();
+  if (!cves.length) return;
+  let pkgs;
+  try {
+    const res = await fetch('/api/patchability', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ report: { distro_family: family }, cves }),
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || 'patchability failed');
+    pkgs = data.packages || {};
+  } catch (_) {
+    // Network/back-end issue — clear the "checking" pills rather than hang
+    document.querySelectorAll('.patch-status-checking').forEach(el => {
+      el.textContent = ''; el.className = 'patch-status';
+    });
+    return;
+  }
+  for (const [pkg, info] of Object.entries(pkgs)) {
+    const item = document.querySelector(`.patch-item[data-patch-pkg="${CSS.escape(pkg)}"]`);
+    if (item) _applyPatchStatus(item, info);
+  }
+}
+
+function _applyPatchStatus(item, info) {
+  const meta   = _PATCH_STATUS[info.status] || _PATCH_STATUS.unknown;
+  const statEl = item.querySelector('.patch-status');
+  if (statEl) { statEl.textContent = meta.label; statEl.className = `patch-status ${meta.cls}`; }
+
+  const warnEl = item.querySelector('.patch-warn');
+  const aiBtn  = item.querySelector('.patch-ai-btn');
+  if (meta.warn && warnEl) {
+    warnEl.style.display = 'flex';
+    warnEl.innerHTML = `<span class="patch-warn-icon">!</span>
+      <span>${escapeHtml(info.note || 'This package may not be directly patchable.')}</span>`;
+    // Not directly patchable → steer the user to AI mitigation as the next step
+    if (aiBtn) aiBtn.textContent = info.status === 'no_fix'
+      ? 'Get mitigation steps (AI)' : 'Get next steps (AI)';
+    item.classList.add('patch-item-warn');
+  } else if (warnEl) {
+    warnEl.style.display = 'none';
+    item.classList.remove('patch-item-warn');
+  }
 }
 
 function _wirePatchItems(list, host, family) {
