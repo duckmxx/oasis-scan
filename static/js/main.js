@@ -1377,6 +1377,16 @@ function _wirePatchItems(list, host, family) {
   });
 }
 
+function _patchPlanKey(host, pkg, pkgCves) {
+  const ids = pkgCves.map(c => c.id).sort().join('+');
+  return `${host}_${pkg}_${pkgCves[0]?.installed ?? '?'}_${ids}`.replace(/[^a-zA-Z0-9_+.-]/g, '_');
+}
+
+function _renderPatchPlan(out, text) {
+  out.innerHTML = `<div class="patch-ai-head">Remediation plan</div>
+    <div class="patch-ai-body">${_mdLite(text || 'No response.')}</div>`;
+}
+
 async function _aiPatchPackage(pkg, host, family) {
   const item = document.querySelector(`.patch-item[data-patch-pkg="${CSS.escape(pkg)}"]`);
   if (!item) return;
@@ -1384,8 +1394,24 @@ async function _aiPatchPackage(pkg, host, family) {
   const btn = item.querySelector('.patch-ai-btn');
   const { cves } = _patchContext();
   const pkgCves = cves.filter(c => (c.package || '(unknown)') === pkg);
+  const cacheKey = _patchPlanKey(host, pkg, pkgCves);
 
   out.style.display = 'block';
+
+  // Cache: localStorage → Firebase. Only spend tokens if neither has this plan.
+  try {
+    const raw = localStorage.getItem('patch_plan_' + cacheKey);
+    if (raw) { _renderPatchPlan(out, JSON.parse(raw).text); return; }
+  } catch (_) {}
+  if (typeof window.__loadPatchPlan === 'function') {
+    const cached = await window.__loadPatchPlan(cacheKey);
+    if (cached?.text) {
+      try { localStorage.setItem('patch_plan_' + cacheKey, JSON.stringify({ text: cached.text })); } catch (_) {}
+      _renderPatchPlan(out, cached.text);
+      return;
+    }
+  }
+
   out.innerHTML = `<div class="patch-ai-loading"><span class="scan-spinner" style="width:16px;height:16px"></span> J.A.R.V.I.S. is drafting a remediation plan…</div>`;
   if (btn) btn.disabled = true;
   const toast = showToast(`Generating patch plan for ${pkg}…`, 'loading');
@@ -1410,8 +1436,11 @@ async function _aiPatchPackage(pkg, host, family) {
     });
     const data = await res.json();
     if (!data.ok) throw new Error(data.error || 'AI request failed');
-    out.innerHTML = `<div class="patch-ai-head">Remediation plan</div>
-      <div class="patch-ai-body">${_mdLite(data.text || 'No response.')}</div>`;
+    const text = data.text || 'No response.';
+    _renderPatchPlan(out, text);
+    // Persist so the same package isn't re-billed (localStorage + Firebase)
+    try { localStorage.setItem('patch_plan_' + cacheKey, JSON.stringify({ text })); } catch (_) {}
+    if (typeof window.__savePatchPlan === 'function') window.__savePatchPlan(cacheKey, text);
     toast.update(`Patch plan ready for ${pkg}`, 'success');
   } catch (err) {
     out.innerHTML = `<div class="patch-ai-body" style="color:var(--sev-critical)">AI request failed: ${escapeHtml(err.message)}</div>`;
@@ -1950,16 +1979,18 @@ document.getElementById('topo-rebuild-btn')?.addEventListener('click', () => {
   if (_lastReport) runTopologyBuild();
 });
 
-// Force a fresh AI pass that draws multiple CVE-labeled attack vectors on the map
-window.__regenAttackVectors = function () {
+// Explicit, user-triggered AI attack analysis. Cache-aware: only spends tokens
+// if there is no cached analysis for the current host + CVE posture.
+window.__genAttackAnalysis = function () {
   const topo = window.__lastTopo || _savedTopology || window.__savedData?.topology;
   const cvs  = _cveData || (window.__savedData
     ? { cves: window.__savedData.cves, counts: window.__savedData.counts } : null);
   if (!topo) { showToast('Open the Attack Map first to build the topology', 'warning'); return; }
   if (!cvs)  { showToast('No CVE data yet — run a scan first', 'warning'); return; }
-  showToast('Generating AI attack vectors…', 'loading', { duration: 2500 });
-  buildAIAttackNarrative(topo, cvs, { force: true });
+  buildAIAttackNarrative(topo, cvs);   // uses cache; calls Groq only if not cached
 };
+// Back-compat alias for the toolbar button handler in ai.js
+window.__regenAttackVectors = window.__genAttackAnalysis;
 
 async function runTopologyFromSaved(topo, cveData) {
   const container = document.getElementById('topology-cy');
@@ -1973,7 +2004,7 @@ async function runTopologyFromSaved(topo, cveData) {
     fsDevices = await window.__getFirestoreDevices();
   }
   renderTopology(topo, cveData, fsDevices, null);
-  buildAIAttackNarrative(topo, cveData);
+  showCachedNarrativeOrHint(topo, cveData);   // no AI call unless cached
 }
 
 async function runTopologyBuild() {
@@ -2000,7 +2031,7 @@ async function runTopologyBuild() {
     }
 
     renderTopology(topo, _cveData, fsDevices, null);
-    buildAIAttackNarrative(topo, _cveData);
+    showCachedNarrativeOrHint(topo, _cveData);   // no AI call unless cached
 
   } catch (err) {
     container.innerHTML = `<div class="empty-state">
@@ -2025,6 +2056,7 @@ function _deviceRisk(d) {
 }
 
 function renderTopology(topo, cveData, fsDevices, aiPaths) {
+  window.__lastTopo = topo;          // so the AI-analysis button can find the current topo
   const hostname = topo.hostname || 'This Device';
   const gateway  = topo.gateway;
   const myIps    = topo.my_ips || [];
@@ -2097,10 +2129,10 @@ function renderTopology(topo, cveData, fsDevices, aiPaths) {
     elements.push({ data: { id: 'e-gw-' + fid, source: gateway ? 'router' : 'internet', target: fid, etype: 'lan' } });
   }
 
-  // Attack web: deterministic CVE edges (one per CVE → host) + lateral movement +
-  // secondary entry points. AI-specified vectors (if any) are layered on top.
+  // Attack web — 100% deterministic from real CVE + network data (one edge per
+  // CVE → host, lateral movement, secondary entry points). No AI/invented data
+  // is ever drawn on the map; the AI only writes the narrative text below it.
   const webDefs = _cveAttackEdges(topo, cveData, neighbors, fsDevices);
-  if (aiPaths) webDefs.push(..._attackEdgeDefs(_attackPaths(aiPaths), topo, neighbors));
   for (const def of webDefs) {
     const okSrc = elements.some(e => e.data?.id === def.data.source);
     const okTgt = elements.some(e => e.data?.id === def.data.target);
@@ -2120,21 +2152,23 @@ function renderTopology(topo, cveData, fsDevices, aiPaths) {
     elements:  elements,
     style:     _topoStyle(),
     layout: {
-      name:              'cose',          // force-directed → organic web, not a line
-      animate:            true,
-      animationDuration:  700,
-      nodeRepulsion:      9000,
-      idealEdgeLength:    110,
-      edgeElasticity:     120,
-      gravity:            0.35,
-      nestingFactor:      1.1,
-      padding:            40,
-      randomize:          false,
+      name:                       'cose',   // force-directed → organic web, not a line
+      animate:                     true,
+      animationDuration:           700,
+      nodeRepulsion:               24000,    // push nodes well apart
+      idealEdgeLength:             170,      // longer edges = more breathing room
+      edgeElasticity:              90,
+      gravity:                     0.18,     // weaker pull → spreads out
+      componentSpacing:            140,
+      nodeOverlap:                 24,
+      nodeDimensionsIncludeLabels: true,     // reserve space for edge/node labels
+      padding:                     60,
+      randomize:                   false,
     },
     userZoomingEnabled:   true,
     userPanningEnabled:   true,
     boxSelectionEnabled:  false,
-    minZoom: 0.3,
+    minZoom: 0.25,
     maxZoom: 3,
   });
 
@@ -2467,6 +2501,59 @@ function _renderAttackNarrativeResult(narrative, aiPaths, topo, subline, steps) 
       ? `AI analysis · ${edges} CVE attack path${edges !== 1 ? 's' : ''} on the map · click any edge for its CVE`
       : 'AI analysis · based on live CVE data + network topology';
   }
+}
+
+// Stable cache key for a host's AI attack analysis (host + CVE posture + neighbours)
+function _narrativeCacheKey(topo, cveData) {
+  const neighbors = (topo.neighbors || []).filter(n => n.ip && n.ip !== topo.gateway);
+  return `atk_${topo.hostname || 'this'}_${cveData?.counts?.critical ?? 0}c_` +
+         `${cveData?.counts?.high ?? 0}h_${neighbors.length}n`.replace(/[^a-zA-Z0-9_-]/g, '_');
+}
+
+// Auto-path: show a cached AI narrative if one exists (free), otherwise show a
+// hint with a Generate button. NEVER calls Groq — that only happens on click.
+async function showCachedNarrativeOrHint(topo, cveData) {
+  const panel   = document.getElementById('attack-narrative-panel');
+  const steps   = document.getElementById('attack-steps');
+  const subline = document.getElementById('attack-narrative-sub');
+  if (!panel || !steps) return;
+  if (!cveData) { panel.style.display = 'none'; return; }
+  panel.style.display = '';
+  const cacheKey = _narrativeCacheKey(topo, cveData);
+
+  // localStorage cache (free)
+  try {
+    const raw = localStorage.getItem('ai_narrative_' + cacheKey);
+    if (raw) {
+      const cached = JSON.parse(raw);
+      if (cached?.narrative && Date.now() - (cached.savedAt || 0) < 86400000) {
+        if (subline) subline.textContent = 'AI analysis · cached';
+        steps.innerHTML = '';
+        _renderAttackNarrativeResult(cached.narrative, cached.aiPaths, topo, subline, steps);
+        return;
+      }
+    }
+  } catch (_) {}
+
+  // Firebase cache (free)
+  if (typeof window.__loadAINarrative === 'function') {
+    const cached = await window.__loadAINarrative(cacheKey);
+    if (cached?.narrative) {
+      try { localStorage.setItem('ai_narrative_' + cacheKey, JSON.stringify({ narrative: cached.narrative, aiPaths: cached.aiPaths, savedAt: Date.now() })); } catch (_) {}
+      if (subline) subline.textContent = 'AI analysis · cached';
+      steps.innerHTML = '';
+      _renderAttackNarrativeResult(cached.narrative, cached.aiPaths, topo, subline, steps);
+      return;
+    }
+  }
+
+  // No cache → invite the user; do NOT spend tokens automatically
+  if (subline) subline.textContent = 'Not generated yet';
+  steps.innerHTML = `<div class="attack-hint">
+    <p>The attack map above is built directly from your live CVE and network data.</p>
+    <button class="btn btn-primary btn-sm" onclick="window.__genAttackAnalysis()">Generate AI analysis</button>
+    <span class="text-muted">optional · uses AI</span>
+  </div>`;
 }
 
 async function buildAIAttackNarrative(topo, cveData, opts = {}) {

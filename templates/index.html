@@ -1335,6 +1335,26 @@ curl -O https://scanoasis.tech/download/gui.py</code></pre>
         return snap.exists() ? snap.data() : null;
       } catch (e) { return null; }
     };
+
+    // AI patch remediation plans — cached so the same package isn't re-billed.
+    window.__savePatchPlan = async function(cacheKey, text) {
+      const user = auth.currentUser;
+      if (!user) return;
+      try {
+        await setDoc(doc(db, 'users', user.uid, 'ai_cache', 'patch_' + cacheKey), {
+          text, generatedAt: serverTimestamp(),
+        });
+      } catch (e) { console.error('savePatchPlan failed', e); }
+    };
+
+    window.__loadPatchPlan = async function(cacheKey) {
+      const user = auth.currentUser;
+      if (!user) return null;
+      try {
+        const snap = await getDoc(doc(db, 'users', user.uid, 'ai_cache', 'patch_' + cacheKey));
+        return snap.exists() ? snap.data() : null;
+      } catch (e) { return null; }
+    };
   </script>
   <!-- =====================================================
        DEVICE DETAIL MODAL (slide-over)
