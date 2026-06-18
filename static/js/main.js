@@ -923,7 +923,7 @@ function populateOverviewCVEs(cves, counts) {
         onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();window.__gotoCVE('${escapeHtml(id)}')}">
       <span class="cvss-score cvss-${sev}">${score}</span>
       <div class="ov-cve-main">
-        <span class="cve-id mono">${escapeHtml(c.id)} <span style="color:var(--accent);font-size:10px">↗</span></span>
+        <span class="cve-id mono">${escapeHtml(c.id)}</span>
         <span class="ov-cve-pkg">${escapeHtml(c.package)}</span>
       </div>
       <span class="badge badge-${sev}">${sev}</span>
@@ -1314,7 +1314,6 @@ function renderPatches() {
         onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();window.__gotoCVE('${escapeHtml(c.id)}')}">
         <span class="badge badge-${c.severity}" style="padding:0 5px">${c.severity[0].toUpperCase()}</span>
         ${escapeHtml(c.id)}${info ? ` · <span style="opacity:.8">${info.label}</span>` : ''}
-        <span style="color:var(--accent);font-size:10px;margin-left:2px">↗</span>
       </span>`;
     }).join('');
     return `
@@ -2163,8 +2162,8 @@ document.getElementById('topo-rebuild-btn')?.addEventListener('click', () => {
   runTopologyFromFirestore();
 });
 
-// Toolbar AI button — shown as "↻ Regenerate analysis" once a narrative exists;
-// force-regenerates (bypasses cache). Was previously unwired (did nothing).
+// Toolbar AI button — always visible; "Generate AI analysis" until one exists,
+// then "Regenerate analysis". Force-regenerates (bypasses cache). Was unwired.
 document.getElementById('topo-ai-btn')?.addEventListener('click', () => {
   window.__genAttackAnalysis({ force: true });
 });
@@ -3014,9 +3013,9 @@ function _renderAttackNarrativeResult(narrative, aiPaths, topo, subline, steps) 
     ? lines.map(l => `<p class="attack-step">${linkifyCVE(mdToHtml(escapeHtml(l)))}</p>`).join('')
     : `<p class="attack-step" style="color:var(--text-secondary)">No narrative returned.</p>`;
 
-  // A narrative is now shown — the toolbar button becomes "Regenerate".
+  // A narrative is now shown — the (always-visible) toolbar button regenerates.
   const aiBtn = document.getElementById('topo-ai-btn');
-  if (aiBtn) { aiBtn.style.display = ''; aiBtn.textContent = '↻ Regenerate analysis'; }
+  if (aiBtn) { aiBtn.style.display = ''; aiBtn.textContent = 'Regenerate analysis'; }
 
   if (subline) {
     const edges = window._topo_cy ? window._topo_cy.edges('.attack-path').length : 0;
@@ -3070,17 +3069,17 @@ async function showCachedNarrativeOrHint(topo, cveData) {
     }
   }
 
-  // No cache → invite the user; do NOT spend tokens automatically. Hide the
-  // toolbar button so there aren't two competing "generate" controls — this
-  // inline call-to-action is the single entry point until an analysis exists.
+  // No cache → invite the user; do NOT spend tokens automatically. The toolbar
+  // "Generate AI analysis" button is the single control (no duplicate inline
+  // button), so it's always present.
   const aiBtn = document.getElementById('topo-ai-btn');
-  if (aiBtn) aiBtn.style.display = 'none';
+  if (aiBtn) { aiBtn.style.display = ''; aiBtn.textContent = 'Generate AI analysis'; }
   if (subline) subline.textContent = 'Not generated yet';
   steps.innerHTML = `<div class="attack-hint">
-    <p>The map above is built from your live CVE + network data. Generate an AI
-       walkthrough of how an attacker could chain these into attack paths.</p>
-    <button class="btn btn-primary btn-sm" onclick="window.__genAttackAnalysis()">✨ Generate AI analysis</button>
-    <span class="text-muted">optional · uses AI · cached after first run</span>
+    <p>The map above is built from your live CVE and network data. Use
+       <strong>Generate AI analysis</strong> for an attacker's-eye walkthrough of
+       how these chain into attack paths.</p>
+    <span class="text-muted">Optional · uses AI · cached after the first run.</span>
   </div>`;
 }
 
