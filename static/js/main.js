@@ -254,6 +254,7 @@ async function startScan() {
   if (_dot)      _dot.className = 'status-dot scanning';
   if (_statusLbl) _statusLbl.textContent = 'Scanning…';
   if (scanBtn)   scanBtn.disabled = true;
+  showToast('Running system scan…', 'loading', { duration: 4000 });
 
   const steps = [
     'Collecting OS info…', 'Reading CPU & memory…', 'Scanning block devices…',
@@ -286,6 +287,7 @@ async function startScan() {
     if (_dot)      _dot.className = 'status-dot error';
     if (_statusLbl) _statusLbl.textContent = 'Scan error';
     if (stepLabel) stepLabel.textContent = 'Scan failed: ' + err.message;
+    showToast('System scan failed: ' + err.message, 'error');
     setTimeout(() => { if (overlay) overlay.style.display = 'none'; }, 3000);
     if (scanBtn) scanBtn.disabled = false;
     return;
@@ -379,6 +381,13 @@ async function runCVEAnalysis(report) {
 
     populateCVEs(data.cves, data.counts);
 
+    const _crit = data.counts?.critical ?? 0, _high = data.counts?.high ?? 0;
+    const _tot  = data.cves?.length ?? 0;
+    showToast(
+      _tot === 0 ? 'CVE scan complete — no known vulnerabilities found'
+                 : `CVE scan complete — ${_tot} found (${_crit} critical, ${_high} high)`,
+      _crit > 0 ? 'warning' : _tot === 0 ? 'success' : 'info');
+
     _cveData = { cves: data.cves, counts: data.counts };
     window.__cveData = _cveData;
     if (document.getElementById('section-topology') &&
@@ -447,6 +456,7 @@ async function runCVEAnalysis(report) {
   } catch (err) {
     if (_dot)      _dot.className = 'status-dot error';
     if (_statusLbl) _statusLbl.textContent = 'CVE check failed';
+    showToast('CVE scan failed: ' + err.message, 'error');
     if (tbody) {
       tbody.innerHTML = `<tr><td colspan="7">
         <div class="empty-state">
@@ -488,6 +498,10 @@ async function runIntegrityCheck(report) {
       services:   report.services?.running  ?? [],
     };
     populateIntegrity(extData, report?.os?.hostname);
+    const _isum   = data.summary ?? {};
+    const _issues = (_isum.malicious_pkgs ?? 0) + (_isum.file_issues ?? 0);
+    if (_issues > 0)
+      showToast(`System audit: ${_issues} integrity issue${_issues !== 1 ? 's' : ''} found — see System Audit`, 'warning');
     const hostname = report?.os?.hostname;
     if (hostname && typeof window.__saveIntegrityData === 'function') {
       window.__saveIntegrityData(hostname, extData);
