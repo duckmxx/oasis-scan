@@ -14,18 +14,38 @@ import urllib.error
 _SEV_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "unknown": 4}
 _OSV_BATCH = 500   # max queries per OSV request
 
+# NOTE: order matters — first match wins. Keep in sync with _CVE_TYPE_KW in
+# static/js/main.js. Keywords cover the Arch Security Tracker's `type` strings
+# (e.g. "arbitrary code injection", "cross-site request forgery") so they don't
+# fall through to "Other".
 _VULN_TYPES = [
-    ("RCE",      ["arbitrary code execution", "remote code execution", "code execution", "execute arbitrary"]),
-    ("DoS",      ["denial of service", "memory exhaustion", "null pointer", "infinite loop", "crash", "out of memory", "resource exhaustion"]),
-    ("EscPriv",  ["privilege escalation", "gain root", "local privilege", "escalation of privilege", "gain elevated"]),
-    ("InfoDisc", ["information disclosure", "sensitive information", "memory leak", "data leak", "information leak", "uninitialized memory"]),
     ("XSS",      ["cross-site scripting", " xss", "html injection", "script injection"]),
     ("SQLi",     ["sql injection"]),
-    ("Overflow", ["buffer overflow", "stack overflow", "heap overflow", "integer overflow", "out-of-bounds write", "stack-based buffer", "heap-based buffer"]),
-    ("Bypass",   ["bypass", "restriction bypass", "authentication bypass", "access control bypass", "improper authentication"]),
-    ("Traversal",["directory traversal", "path traversal"]),
+    ("RCE",      ["arbitrary code execution", "remote code execution", "code execution",
+                  "execute arbitrary", "arbitrary code injection", "code injection",
+                  "command injection", "arbitrary command", "command execution",
+                  "arbitrary file upload", "sandbox escape", "deserialization",
+                  "xml external entity", "proxy injection", "url request injection"]),
+    ("EscPriv",  ["privilege escalation", "gain root", "local privilege",
+                  "escalation of privilege", "gain elevated", "elevation of privilege"]),
+    ("Overflow", ["buffer overflow", "stack overflow", "heap overflow", "integer overflow",
+                  "out-of-bounds write", "out of bounds write", "stack-based buffer",
+                  "heap-based buffer", "out-of-bounds"]),
     ("UAF",      ["use after free", "use-after-free"]),
-    ("Corrupt",  ["memory corruption", "heap corruption", "type confusion"]),
+    ("Corrupt",  ["memory corruption", "heap corruption", "type confusion", "double free"]),
+    ("Traversal",["directory traversal", "path traversal", "arbitrary filesystem access",
+                  "arbitrary file read", "arbitrary file write"]),
+    ("Spoof",    ["content spoofing", "spoofing", "man-in-the-middle", "open redirect",
+                  "silent downgrade", "certificate verification", "session hijacking",
+                  "signature forgery", "phishing"]),
+    ("Bypass",   ["bypass", "restriction bypass", "authentication bypass",
+                  "access control bypass", "improper authentication", "insufficient validation",
+                  "cross-site request forgery", "request forgery", "csrf", "access restriction"]),
+    ("InfoDisc", ["information disclosure", "sensitive information", "memory leak",
+                  "data leak", "information leak", "uninitialized memory",
+                  "private key recovery", "exposure"]),
+    ("DoS",      ["denial of service", "memory exhaustion", "null pointer", "infinite loop",
+                  "crash", "out of memory", "resource exhaustion", "time alteration"]),
 ]
 
 _REMOTE_KW = ["remote", "network", "unauthenticated", "internet", "http", "web server", "listening", "socket", "tcp", "udp", "attacker-controlled"]

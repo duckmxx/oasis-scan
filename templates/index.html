@@ -617,6 +617,23 @@
         </div>
       </div>
 
+      <!-- Quick install: one copy-paste for the CLI scanner -->
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title"><span class="icon">⚡</span> Quick Install — Linux (copy &amp; paste)</div>
+          <button class="btn btn-ghost btn-sm" id="run-oneliner-copy">Copy</button>
+        </div>
+        <div class="panel-body">
+          <div style="color:var(--text-secondary);font-size:12.5px;margin-bottom:10px">
+            Paste this into a terminal. It downloads the scanner, then signs you in to sync results here.
+          </div>
+          <pre class="run-code" style="white-space:pre-wrap"><code id="run-oneliner">Loading…</code></pre>
+          <div class="text-muted" style="font-size:11px;margin-top:8px">
+            Needs Python 3. Network discovery also uses <code>nmap</code> if installed.
+          </div>
+        </div>
+      </div>
+
       <!-- Quick start: GUI -->
       <div class="panel">
         <div class="panel-header">
@@ -1569,6 +1586,29 @@ curl -O https://scanoasis.tech/download/gui.py</code></pre>
       });
     }
 
+    // ── Run page: one copy-paste install command for the CLI scanner ──────────
+    (function _buildRunOneliner() {
+      const code = document.getElementById('run-oneliner');
+      if (!code) return;
+      const origin = location.origin;
+      const cmd =
+`mkdir -p scan-oasis && cd scan-oasis
+for f in scanner cve_lookup net_discovery; do curl -fsSL ${origin}/download/$f.py -o $f.py; done
+cat > config.py <<'EOF'
+FIREBASE_API_KEY = "${firebaseConfig.apiKey}"
+FIREBASE_PROJECT = "${firebaseConfig.projectId}"
+EOF
+python3 scanner.py`;
+      code.textContent = cmd;
+      document.getElementById('run-oneliner-copy')?.addEventListener('click', function () {
+        const btn = this;
+        _copyText(cmd)
+          .then(() => { btn.textContent = 'Copied!'; })
+          .catch(() => { btn.textContent = 'Press Ctrl+C'; })
+          .finally(() => setTimeout(() => { btn.textContent = 'Copy'; }, 2000));
+      });
+    })();
+
     async function _refreshTokenList() {
       const list = document.getElementById('token-list');
       if (!list) return;
@@ -1598,21 +1638,20 @@ curl -O https://scanoasis.tech/download/gui.py</code></pre>
       const user = auth.currentUser;
       if (!user) return;
       if (!confirm('Revoke this token? Any agent using it will lose access.')) return;
+      // The server revoke is best-effort — it can 404 if the server's local token
+      // cache was reset (e.g. a redeploy). Either way we ALWAYS delete the
+      // Firestore record (the source of truth for this list) so the token can
+      // never become "impossible to delete".
       try {
         const idToken = await user.getIdToken();
-        const r = await fetch('/api/admin/revoke-token', {
+        await fetch('/api/admin/revoke-token', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + idToken },
           body: JSON.stringify({ token }),
-        });
-        const d = await r.json();
-        if (d.ok) {
-          await window.__deleteAgentTokenMeta(token);
-          _refreshTokenList();
-        } else {
-          alert('Revoke failed: ' + (d.error || 'unknown error'));
-        }
-      } catch (e) { alert('Revoke failed: ' + e.message); }
+        }).catch(() => {});
+      } catch (_) {}
+      try { await window.__deleteAgentTokenMeta(token); } catch (_) {}
+      _refreshTokenList();
     }
 
     document.getElementById('create-token-btn')?.addEventListener('click', async () => {

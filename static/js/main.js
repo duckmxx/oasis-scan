@@ -94,19 +94,22 @@ const _CVE_TYPE_INFO = {
   Traversal: { label: 'Path Traversal',    cls: 'cve-type-traversal'},
   UAF:       { label: 'Use-After-Free',    cls: 'cve-type-uaf'      },
   Corrupt:   { label: 'Memory Corruption', cls: 'cve-type-corrupt'  },
+  Spoof:     { label: 'Spoofing / MitM',   cls: 'cve-type-bypass'   },
 };
+// Order matters — first match wins. Keep in sync with _VULN_TYPES in cve_lookup.py.
 const _CVE_TYPE_KW = [
-  ['RCE',       ['arbitrary code execution', 'remote code execution', 'code execution', 'execute arbitrary']],
-  ['DoS',       ['denial of service', 'memory exhaustion', 'null pointer', 'infinite loop', 'crash', 'out of memory', 'resource exhaustion']],
-  ['EscPriv',   ['privilege escalation', 'gain root', 'local privilege', 'escalation of privilege', 'gain elevated']],
-  ['InfoDisc',  ['information disclosure', 'sensitive information', 'memory leak', 'data leak', 'information leak', 'uninitialized memory']],
   ['XSS',       ['cross-site scripting', ' xss', 'html injection', 'script injection']],
   ['SQLi',      ['sql injection']],
-  ['Overflow',  ['buffer overflow', 'stack overflow', 'heap overflow', 'integer overflow', 'out-of-bounds write', 'stack-based buffer', 'heap-based buffer']],
-  ['Bypass',    ['bypass', 'authentication bypass', 'access control bypass', 'improper authentication']],
-  ['Traversal', ['directory traversal', 'path traversal']],
+  ['RCE',       ['arbitrary code execution', 'remote code execution', 'code execution', 'execute arbitrary', 'arbitrary code injection', 'code injection', 'command injection', 'arbitrary command', 'command execution', 'arbitrary file upload', 'sandbox escape', 'deserialization', 'xml external entity', 'proxy injection', 'url request injection']],
+  ['EscPriv',   ['privilege escalation', 'gain root', 'local privilege', 'escalation of privilege', 'gain elevated', 'elevation of privilege']],
+  ['Overflow',  ['buffer overflow', 'stack overflow', 'heap overflow', 'integer overflow', 'out-of-bounds write', 'out of bounds write', 'stack-based buffer', 'heap-based buffer', 'out-of-bounds']],
   ['UAF',       ['use after free', 'use-after-free']],
-  ['Corrupt',   ['memory corruption', 'heap corruption', 'type confusion']],
+  ['Corrupt',   ['memory corruption', 'heap corruption', 'type confusion', 'double free']],
+  ['Traversal', ['directory traversal', 'path traversal', 'arbitrary filesystem access', 'arbitrary file read', 'arbitrary file write']],
+  ['Spoof',     ['content spoofing', 'spoofing', 'man-in-the-middle', 'open redirect', 'silent downgrade', 'certificate verification', 'session hijacking', 'signature forgery', 'phishing']],
+  ['Bypass',    ['bypass', 'authentication bypass', 'access control bypass', 'improper authentication', 'insufficient validation', 'cross-site request forgery', 'request forgery', 'csrf', 'access restriction']],
+  ['InfoDisc',  ['information disclosure', 'sensitive information', 'memory leak', 'data leak', 'information leak', 'uninitialized memory', 'private key recovery', 'exposure']],
+  ['DoS',       ['denial of service', 'memory exhaustion', 'null pointer', 'infinite loop', 'crash', 'out of memory', 'resource exhaustion', 'time alteration']],
 ];
 function cveType(c) {
   if (c.type) return c.type;
@@ -123,9 +126,19 @@ function cveVector(c) {
   if (local.some(k => t.includes(k)))  return 'LOCAL';
   return '';
 }
+// When no category matches, fall back to the advisory's own short type phrase
+// (Arch's `type` lands in the summary) rather than a useless "Other".
+function _rawTypeLabel(c) {
+  const s = (c.summary || '').trim();
+  // Use it only if it reads like a short type phrase, not a full sentence.
+  if (s && s.length <= 40 && !/[.]/.test(s)) {
+    return s.replace(/\b\w/g, m => m.toUpperCase());
+  }
+  return 'Other';
+}
 function cveImpactLabel(c) {
   const info = _CVE_TYPE_INFO[cveType(c)];
-  return info ? info.label : 'Other';
+  return info ? info.label : _rawTypeLabel(c);
 }
 function _cveBadgesHtml(c) {
   const info = _CVE_TYPE_INFO[cveType(c)];
@@ -133,7 +146,7 @@ function _cveBadgesHtml(c) {
   const parts = [];
   parts.push(info
     ? `<span class="cve-type ${info.cls}">${info.label}</span>`
-    : `<span class="cve-type cve-type-bypass">Other</span>`);
+    : `<span class="cve-type cve-type-bypass">${escapeHtml(_rawTypeLabel(c))}</span>`);
   if (vec) parts.push(`<span class="cve-vector cve-vector-${vec.toLowerCase()}">${vec}</span>`);
   return `<div class="cve-badges">${parts.join('')}</div>`;
 }
@@ -1005,6 +1018,20 @@ function renderAllCVEs() {
   const deviceMap = _buildDeviceCVEMap();
   const multiDevice = deviceMap.size > 1;
 
+  // Keep the nav badge live (critical + high across all devices) — this runs on
+  // every realtime Firestore update, so the count stays in sync like the others.
+  let _navCrit = 0, _navHigh = 0;
+  for (const { counts } of deviceMap.values()) {
+    _navCrit += counts?.critical ?? 0;
+    _navHigh += counts?.high ?? 0;
+  }
+  const _cveBadge = document.getElementById('nav-cve-badge');
+  if (_cveBadge) {
+    const total = _navCrit + _navHigh;
+    _cveBadge.textContent = total;
+    _cveBadge.classList.toggle('hidden', total === 0);
+  }
+
   // Summary cards row
   const summaryBox = document.getElementById('cve-device-summary');
   if (summaryBox) {
@@ -1258,6 +1285,7 @@ function _worstSev(cves) {
 function renderPatches() {
   const list = document.getElementById('patch-list');
   const bar  = document.getElementById('patch-summary-bar');
+  _updatePatchBadge();          // keep the nav badge live on every (realtime) render
   if (!list) return;
 
   const { cves, host, family } = _patchContext();
@@ -2347,15 +2375,13 @@ function _attachNetInfo(data, nd) {
   if (nd.hostname)    data.dhostname = nd.hostname;
 }
 
-// Pick the "notable" devices for the Attack Map: those exposing an open port or
-// acting as a router/gateway, most-exposed first, capped. Keeps the map a
-// readable subset of the full (Devices-list) device set.
-function _notableNetDevices(netDevices, cap = 50) {
+// Order discovered devices for the Attack Map: routers first, then most-exposed,
+// then everything else (including plain arbitrary-IP hosts — they're shown too).
+// Capped only as a cytoscape performance guard.
+function _notableNetDevices(netDevices, cap = 120) {
   const isRouter = d => /router|gateway/i.test(d.device_type || '');
-  const notable = (netDevices || []).filter(d => (d.open_ports?.length > 0) || isRouter(d));
-  notable.sort((a, b) => (isRouter(b) - isRouter(a))
-                      || ((b.open_ports?.length || 0) - (a.open_ports?.length || 0)));
-  return notable.slice(0, cap);
+  const score = d => (isRouter(d) ? 1e6 : 0) + (d.open_ports?.length || 0);
+  return [...(netDevices || [])].sort((a, b) => score(b) - score(a)).slice(0, cap);
 }
 
 function renderTopology(topo, cveData, fsDevices, aiPaths, netDevices) {
@@ -2433,7 +2459,7 @@ function renderTopology(topo, cveData, fsDevices, aiPaths, netDevices) {
   // The Attack Map shows a NOTABLE subset of the full device list so a crowded
   // network doesn't lag cytoscape — devices with open ports or routers, capped.
   // (netByIp above still indexes ALL devices so neighbours/gateway stay enriched.)
-  for (const nd of _notableNetDevices(netDevices, 50)) {
+  for (const nd of _notableNetDevices(netDevices)) {
     if (!nd.ip || seenIps.has(nd.ip)) continue;
     seenIps.add(nd.ip);
     const did = 'd-' + nd.ip.replace(/[:.]/g, '_');
@@ -3004,7 +3030,11 @@ function _renderAttackNarrativeResult(narrative, aiPaths, topo, subline, steps) 
   const lines = narrative.split('\n')
     .map(l => l.trim())
     .filter(l => l && !isArtifact(l))
-    .map(l => l.replace(/^#{1,6}\s*/, '').replace(/^\s*[-*•]\s+/, '• '));
+    .map(l => l
+      .replace(/^#{1,6}\s*/, '')          // strip markdown headers
+      .replace(/^\s*[-*•]\s+/, '• ')      // normalise bullets
+      .replace(/\s+[—–]\s+/g, ', ')       // em/en dashes used as separators → comma
+      .replace(/\s+-\s+/g, ', '));        // " - " separator → comma (CVE ids untouched)
 
   // ORDER MATTERS: markdown BEFORE linkify. linkify injects onclick handlers
   // containing "window.__gotoCVE" — if mdToHtml ran last, its __bold__ rule would
@@ -3166,7 +3196,7 @@ Build a KILL WEB: 2-4 distinct attack vectors that together form an INTERCONNECT
 Every edge has: "from" and "to" (each MUST be one of: "internet", "current", the gateway IP, or an IP from NEIGHBORS), "cve" (a CVE ID actually present in the data, or "" if none is needed for that hop), and "technique" (3-4 words, e.g. "Remote code execution", "Privilege escalation", "Lateral movement", "ARP spoofing", "Credential reuse"). Only reference CVE IDs and IPs that appear in the data.
 
 SECTION 2 — after the exact separator line "---NARRATIVE---":
-Write a short numbered analysis (4-8 steps). Walk through each named vector and how the compromise spreads across the web. Reference actual CVE IDs, package names, service names, and neighbour IPs. Be specific and technical. End with one concrete remediation step. Use PLAIN TEXT only — no markdown, asterisks, backticks, headers, or JSON in this section.
+Write a short numbered analysis (4-8 steps). Walk through each named vector and how the compromise spreads across the web. Reference actual CVE IDs, package names, service names, and neighbour IPs. Be specific and technical. End with one concrete remediation step. Use PLAIN TEXT only: no markdown, asterisks, backticks, headers, or JSON. Write in clear sentences with normal punctuation; do NOT use em-dashes or hyphens as separators.
 
 === SCAN DATA ===
 HOST: ${hostname}

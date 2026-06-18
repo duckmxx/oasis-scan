@@ -329,7 +329,11 @@ def api_tts():
         return flask.jsonify({"ok": False, "error": str(e)}), 500
 
 
-_DOWNLOAD_WHITELIST = {"gui.py", "scanner.py", "tts_server.py"}
+# Agent files the dashboard serves for the "Quick Install" one-liner. config.py
+# is deliberately NOT here (it holds the Groq key) — the installer writes a
+# minimal config with just the public Firebase project id/key instead.
+_DOWNLOAD_WHITELIST = {"gui.py", "scanner.py", "tts_server.py",
+                       "cve_lookup.py", "net_discovery.py"}
 _BASE_DIR   = _os.path.dirname(_os.path.abspath(__file__))
 # IMPORTANT (production): this file is the durable map of token -> owner creds and
 # the `_fallback` bootstrap used to restore tokens from Firestore. On an ephemeral
