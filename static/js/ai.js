@@ -40,7 +40,7 @@ window.__jarvisSettings = _loadSettings();
 
 /* ── Voice selection (async — voices load after page ready in Chrome) ──── */
 
-// JARVIS voice: prioritise calm UK male voices
+// Sentinel voice: prioritise calm UK male voices
 const _VOICE_PREF = [
   'Google UK English Male',
   'Microsoft George Online (Natural) - English (United Kingdom)',
@@ -73,7 +73,7 @@ if (window.speechSynthesis) {
   _pickVoice();  // synchronous on Firefox
 }
 
-const _AI_SYSTEM = `You are J.A.R.V.I.S. — Just A Rather Very Intelligent System — the AI security intelligence \
+const _AI_SYSTEM = `You are Sentinel — the AI security intelligence \
 integrated into the Scan Oasis operations dashboard. You were designed to protect systems, eliminate threats, \
 and provide actionable intelligence to the operator.
 
@@ -230,7 +230,7 @@ function _initSettingsPanel() {
   _el('settings-test-voice')?.addEventListener('click', async () => {
     const btn = _el('settings-test-voice');
     if (btn) btn.disabled = true;
-    await _speak("All systems nominal, sir. J.A.R.V.I.S. voice calibration complete.");
+    await _speak("All systems nominal. Sentinel voice calibration complete.");
     if (btn) btn.disabled = false;
   });
 

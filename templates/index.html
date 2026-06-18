@@ -166,6 +166,14 @@
               <div class="sev-cell"><span class="sev-dot med"></span><span class="sev-n cvss-medium" id="ov-sev-medium">—</span><span class="sev-cap">Medium</span></div>
               <div class="sev-cell"><span class="sev-dot low"></span><span class="sev-n" id="ov-sev-low">—</span><span class="sev-cap">Low</span></div>
             </div>
+            <!-- Sentinel AI posture summary (cached in Firestore; regenerated only
+                 when the posture actually changes — never on a plain refresh) -->
+            <div class="posture-ai-summary" id="overview-ai-summary"
+                 style="margin-top:12px;padding:10px 12px;border-top:1px solid var(--border);
+                        font-size:12.5px;line-height:1.5;color:var(--text-secondary);display:flex;gap:8px;align-items:flex-start">
+              <span style="color:var(--accent);font-weight:700;flex-shrink:0">Sentinel</span>
+              <span id="overview-ai-summary-text">—</span>
+            </div>
           </div>
         </div>
 
@@ -700,7 +708,7 @@ curl -O https://scanoasis.tech/download/gui.py</code></pre>
             <div class="settings-row">
               <div class="settings-row-label">
                 <span class="settings-label-name">Speed</span>
-                <span class="settings-label-desc">How fast JARVIS speaks</span>
+                <span class="settings-label-desc">How fast Sentinel speaks</span>
               </div>
               <div class="settings-row-control">
                 <span class="settings-val-label" id="settings-speed-label">1.0×</span>
@@ -932,6 +940,7 @@ curl -O https://scanoasis.tech/download/gui.py</code></pre>
       // timing race where renderAllCVEs() fires before __deviceCache is populated.
       loadDevices(user.uid).then(() => {
         window.__loadDiscovered?.();
+        window.__updateAppsStat?.();   // aggregate package count across devices
         const cveSection = document.getElementById('section-cves');
         if (cveSection && !cveSection.classList.contains('hidden')) {
           window.__renderAllCVEs?.();
@@ -1308,6 +1317,7 @@ curl -O https://scanoasis.tech/download/gui.py</code></pre>
             window.__loadDiscovered?.();
             window.__renderAllCVEs?.();
             window.__renderPatches?.();
+            window.__updateAppsStat?.();
           });
         },
         err => console.error('scans listener', err)
@@ -1709,8 +1719,8 @@ curl -O https://scanoasis.tech/download/gui.py</code></pre>
   <!-- =====================================================
        AI ASSISTANT
        ===================================================== -->
-  <button id="ai-fab" title="J.A.R.V.I.S. — Security Intelligence">
-    <span class="jarvis-fab-label">JAR<span>VIS</span></span>
+  <button id="ai-fab" title="Sentinel — Security Intelligence">
+    <span class="jarvis-fab-label">SENT<span>INEL</span></span>
   </button>
 
   <div id="ai-panel" class="ai-panel jarvis-panel" style="display:none">
@@ -1718,7 +1728,7 @@ curl -O https://scanoasis.tech/download/gui.py</code></pre>
       <div class="ai-panel-title">
         <span class="jarvis-logo">⬡</span>
         <div>
-          <div class="jarvis-title-main">J.A.R.V.I.S.</div>
+          <div class="jarvis-title-main">Sentinel</div>
           <div class="jarvis-title-sub">SECURITY INTELLIGENCE // ONLINE</div>
         </div>
       </div>
@@ -1732,14 +1742,14 @@ curl -O https://scanoasis.tech/download/gui.py</code></pre>
     <div class="ai-messages" id="ai-messages">
       <div class="ai-msg ai-msg-assistant">
         <div class="ai-msg-content">
-          Good day, sir. J.A.R.V.I.S. is online and all systems are nominal.<br><br>
+          Good day. Sentinel is online and all systems are nominal.<br><br>
           I'm standing by for your instructions. You may click <strong>Ask AI</strong> on any vulnerability for a threat assessment and remediation protocol. You can also ask me to analyse your network topology for an attack surface briefing.<br><br>
           Shall we begin?
         </div>
       </div>
     </div>
     <div class="ai-input-area jarvis-input-area">
-      <textarea id="ai-input" placeholder="Query J.A.R.V.I.S. — threat assessment, patch protocols, topology analysis…" rows="2"></textarea>
+      <textarea id="ai-input" placeholder="Query Sentinel — threat assessment, patch protocols, topology analysis…" rows="2"></textarea>
       <div class="ai-input-buttons">
         <button class="btn btn-ghost btn-sm" id="ai-mic-btn" title="Voice input">🎤</button>
         <div class="ai-input-buttons-right">

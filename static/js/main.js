@@ -17,6 +17,24 @@ window.__onSavedDataReady = function(data) {
     populateCVEs(data.cves, data.counts);
   }
   if (data.topology) _savedTopology = data.topology;
+  window.__updateAppsStat(data);
+};
+
+// "Apps Scanned" stat — total installed packages across all scanned devices
+// (the old host-scan populateDashboard() set this; it's gone, so derive it from
+// Firestore instead). Exposed so device loads / realtime updates can refresh it.
+window.__updateAppsStat = function(savedData) {
+  let total = 0, found = false;
+  const cache = window.__deviceCache || {};
+  for (const d of Object.values(cache)) {
+    const n = d.pkg_count ?? (Array.isArray(d.packages) ? d.packages.length : 0);
+    if (n) { total += n; found = true; }
+  }
+  if (!found) {
+    const n = savedData?.pkg_count ?? savedData?.packages?.length;
+    if (n) { total = n; found = true; }
+  }
+  setText('stat-apps', found ? total.toLocaleString() : '—');
 };
 
 /* --- Toast notifications --- */
@@ -801,12 +819,78 @@ function _renderAllPackagesGrid(pkgList, foreign, match, totalCount, manager) {
 
 /* --- Overview: severity breakdown + top vulnerabilities preview --- */
 
+// Sentinel AI security-posture summary for the Overview. Deterministically keyed
+// on the current posture (crit/high/med + device count) and cached in
+// localStorage + Firestore `ai_cache`, so it costs ONE Groq call when the posture
+// changes and zero on every other load/refresh.
+let _lastPostureKey = '';
+async function loadPostureSummary(counts) {
+  const el = document.getElementById('overview-ai-summary-text');
+  if (!el) return;
+  const c = counts || {};
+  const crit = c.critical || 0, high = c.high || 0, med = (c.medium || 0) + (c.low || 0);
+  const devCount = Object.keys(window.__deviceCache || {}).length + (window.__netDevices?.length || 0);
+  const key = `posture_${crit}c_${high}h_${med}m_${devCount}d`;
+  if (key === _lastPostureKey) return;          // same posture this session — skip
+  _lastPostureKey = key;
+
+  // 1. localStorage (instant, no network)
+  try {
+    const raw = localStorage.getItem('ai_' + key);
+    if (raw) { const o = JSON.parse(raw); if (o.text) { el.textContent = o.text; return; } }
+  } catch (_) {}
+
+  // 2. Firestore cache (cross-device)
+  if (typeof window.__loadAINarrative === 'function') {
+    const cached = await window.__loadAINarrative(key);
+    if (cached?.narrative) {
+      el.textContent = cached.narrative;
+      try { localStorage.setItem('ai_' + key, JSON.stringify({ text: cached.narrative })); } catch (_) {}
+      return;
+    }
+  }
+
+  // Nothing to summarise yet — don't spend a Groq call on an empty fleet.
+  if (crit + high + med === 0 && devCount === 0) {
+    el.textContent = 'Run the desktop agent on your devices to build your security posture.';
+    _lastPostureKey = '';   // allow a real summary once data arrives
+    return;
+  }
+
+  // 3. Generate ONCE, then cache everywhere.
+  el.textContent = 'Generating posture summary…';
+  try {
+    const prompt = `In 2 concise sentences, summarise this network's security posture for a dashboard. `
+      + `Plain text, no markdown. Data: ${devCount} device(s), ${crit} critical CVEs, ${high} high, ${med} medium/low. `
+      + `State the overall risk level and the single most urgent action.`;
+    const resp = await fetch('/api/ai/complete', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messages: [{ role: 'user', content: prompt }], temperature: 0.4, max_tokens: 160 }),
+    });
+    const d = await resp.json();
+    const text = (d.text || '').trim();
+    if (text) {
+      el.textContent = text;
+      try { localStorage.setItem('ai_' + key, JSON.stringify({ text })); } catch (_) {}
+      if (typeof window.__saveAINarrative === 'function') window.__saveAINarrative(key, text, null);
+    } else {
+      el.textContent = '—';
+      _lastPostureKey = '';
+    }
+  } catch (e) {
+    el.textContent = '—';
+    _lastPostureKey = '';
+  }
+}
+
 function populateOverviewCVEs(cves, counts) {
   counts = counts ?? {};
   setText('ov-sev-critical', counts.critical ?? 0);
   setText('ov-sev-high',     counts.high     ?? 0);
   setText('ov-sev-medium',   counts.medium   ?? 0);
   setText('ov-sev-low',      counts.low      ?? 0);
+
+  loadPostureSummary(counts);   // Sentinel AI summary (cached; no spam)
 
   const box = document.getElementById('overview-top-cves');
   if (!box) return;
@@ -2880,9 +2964,27 @@ function _renderAttackNarrativeResult(narrative, aiPaths, topo, subline, steps) 
       : '';
     return `<a class="cve-link" onclick="window.__gotoCVE('${m}')">${m}</a>${patchBtn}`;
   });
-  const lines = narrative.split('\n').filter(l => l.trim());
+  // Lightweight markdown → HTML (run AFTER escaping so it's safe).
+  const mdToHtml = s => s
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/__(.+?)__/g, '<strong>$1</strong>')
+    .replace(/(^|[^*])\*([^*\n]+?)\*/g, '$1<em>$2</em>')
+    .replace(/`([^`]+?)`/g, '<code>$1</code>');
+  // Drop leftover JSON / code-fence artifacts (the SECTION-1 blob, stray braces)
+  // so curly braces and raw markup never show in the narrative.
+  const isArtifact = l =>
+    l.startsWith('```') || l === '---NARRATIVE---' ||
+    /^[{}\[\],]+$/.test(l) ||
+    /"(attack_paths|edges|from|to|technique|cve)"\s*:/.test(l) ||
+    (l.startsWith('{') && l.endsWith('}'));
+
+  const lines = narrative.split('\n')
+    .map(l => l.trim())
+    .filter(l => l && !isArtifact(l))
+    .map(l => l.replace(/^#{1,6}\s*/, '').replace(/^\s*[-*•]\s+/, '• '));
+
   steps.innerHTML = lines.length > 0
-    ? lines.map(l => `<p class="attack-step">${linkifyCVE(escapeHtml(l.trim()))}</p>`).join('')
+    ? lines.map(l => `<p class="attack-step">${mdToHtml(linkifyCVE(escapeHtml(l)))}</p>`).join('')
     : `<p class="attack-step" style="color:var(--text-secondary)">No narrative returned.</p>`;
 
   if (subline) {
@@ -3029,7 +3131,7 @@ Build a KILL WEB: 2-4 distinct attack vectors that together form an INTERCONNECT
 Every edge has: "from" and "to" (each MUST be one of: "internet", "current", the gateway IP, or an IP from NEIGHBORS), "cve" (a CVE ID actually present in the data, or "" if none is needed for that hop), and "technique" (3-4 words, e.g. "Remote code execution", "Privilege escalation", "Lateral movement", "ARP spoofing", "Credential reuse"). Only reference CVE IDs and IPs that appear in the data.
 
 SECTION 2 — after the exact separator line "---NARRATIVE---":
-Write a short numbered analysis (4-8 steps). Walk through each named vector and how the compromise spreads across the web. Reference actual CVE IDs, package names, service names, and neighbour IPs. Be specific and technical. End with one concrete remediation step.
+Write a short numbered analysis (4-8 steps). Walk through each named vector and how the compromise spreads across the web. Reference actual CVE IDs, package names, service names, and neighbour IPs. Be specific and technical. End with one concrete remediation step. Use PLAIN TEXT only — no markdown, asterisks, backticks, headers, or JSON in this section.
 
 === SCAN DATA ===
 HOST: ${hostname}
