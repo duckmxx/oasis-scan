@@ -2163,6 +2163,12 @@ document.getElementById('topo-rebuild-btn')?.addEventListener('click', () => {
   runTopologyFromFirestore();
 });
 
+// Toolbar AI button — shown as "↻ Regenerate analysis" once a narrative exists;
+// force-regenerates (bypasses cache). Was previously unwired (did nothing).
+document.getElementById('topo-ai-btn')?.addEventListener('click', () => {
+  window.__genAttackAnalysis({ force: true });
+});
+
 // Clear all discovered devices from the Attack Map (and the device DB). Wipes
 // the stale/garbage hosts that clutter and lag the map, then rebuilds it clean.
 document.getElementById('topo-clear-btn')?.addEventListener('click', async () => {
@@ -2183,13 +2189,14 @@ document.getElementById('topo-clear-btn')?.addEventListener('click', async () =>
 
 // Explicit, user-triggered AI attack analysis. Cache-aware: only spends tokens
 // if there is no cached analysis for the current host + CVE posture.
-window.__genAttackAnalysis = function () {
+window.__genAttackAnalysis = function (opts = {}) {
   const topo = window.__lastTopo || _savedTopology || window.__savedData?.topology;
-  const cvs  = _cveData || (window.__savedData
-    ? { cves: window.__savedData.cves, counts: window.__savedData.counts } : null);
+  const cvs  = _cveData
+    || (window.__savedData?.cves?.length ? { cves: window.__savedData.cves, counts: window.__savedData.counts } : null)
+    || _aggregateDeviceCves();
   if (!topo) { showToast('Open the Attack Map first to build the topology', 'warning'); return; }
-  if (!cvs)  { showToast('No CVE data yet — run a scan first', 'warning'); return; }
-  buildAIAttackNarrative(topo, cvs);   // uses cache; calls Groq only if not cached
+  if (!cvs)  { showToast('No CVE data yet — run the desktop agent first', 'warning'); return; }
+  buildAIAttackNarrative(topo, cvs, opts);   // opts.force=true re-runs (Regenerate)
 };
 // Back-compat alias for the toolbar button handler in ai.js
 window.__regenAttackVectors = window.__genAttackAnalysis;
@@ -2932,9 +2939,21 @@ function _cveAttackEdges(topo, cveData, neighbors, fsDevices, netDevices, seenIp
 }
 
 function _cveToPackage(cveId) {
-  const cves = window.__savedData?.cves ?? [];
-  const match = cves.find(c => c.id === cveId);
-  return match?.package ?? null;
+  // Search every CVE source we have so the Patch button resolves regardless of
+  // which device the CVE belongs to.
+  const pools = [];
+  if (_cveData?.cves) pools.push(_cveData.cves);
+  if (window.__savedData?.cves) pools.push(window.__savedData.cves);
+  if (window.__deviceCache) {
+    for (const d of Object.values(window.__deviceCache)) {
+      if (Array.isArray(d.cves)) pools.push(d.cves);
+    }
+  }
+  for (const cves of pools) {
+    const m = cves.find(c => c.id === cveId);
+    if (m?.package) return m.package;
+  }
+  return null;
 }
 
 function showTopoEdgeInfo(d) {
@@ -2988,9 +3007,16 @@ function _renderAttackNarrativeResult(narrative, aiPaths, topo, subline, steps) 
     .filter(l => l && !isArtifact(l))
     .map(l => l.replace(/^#{1,6}\s*/, '').replace(/^\s*[-*•]\s+/, '• '));
 
+  // ORDER MATTERS: markdown BEFORE linkify. linkify injects onclick handlers
+  // containing "window.__gotoCVE" — if mdToHtml ran last, its __bold__ rule would
+  // eat the "__" and break the handlers (the "buttons do nothing" bug).
   steps.innerHTML = lines.length > 0
-    ? lines.map(l => `<p class="attack-step">${mdToHtml(linkifyCVE(escapeHtml(l)))}</p>`).join('')
+    ? lines.map(l => `<p class="attack-step">${linkifyCVE(mdToHtml(escapeHtml(l)))}</p>`).join('')
     : `<p class="attack-step" style="color:var(--text-secondary)">No narrative returned.</p>`;
+
+  // A narrative is now shown — the toolbar button becomes "Regenerate".
+  const aiBtn = document.getElementById('topo-ai-btn');
+  if (aiBtn) { aiBtn.style.display = ''; aiBtn.textContent = '↻ Regenerate analysis'; }
 
   if (subline) {
     const edges = window._topo_cy ? window._topo_cy.edges('.attack-path').length : 0;
@@ -3044,12 +3070,17 @@ async function showCachedNarrativeOrHint(topo, cveData) {
     }
   }
 
-  // No cache → invite the user; do NOT spend tokens automatically
+  // No cache → invite the user; do NOT spend tokens automatically. Hide the
+  // toolbar button so there aren't two competing "generate" controls — this
+  // inline call-to-action is the single entry point until an analysis exists.
+  const aiBtn = document.getElementById('topo-ai-btn');
+  if (aiBtn) aiBtn.style.display = 'none';
   if (subline) subline.textContent = 'Not generated yet';
   steps.innerHTML = `<div class="attack-hint">
-    <p>The attack map above is built directly from your live CVE and network data.</p>
-    <button class="btn btn-primary btn-sm" onclick="window.__genAttackAnalysis()">Generate AI analysis</button>
-    <span class="text-muted">optional · uses AI</span>
+    <p>The map above is built from your live CVE + network data. Generate an AI
+       walkthrough of how an attacker could chain these into attack paths.</p>
+    <button class="btn btn-primary btn-sm" onclick="window.__genAttackAnalysis()">✨ Generate AI analysis</button>
+    <span class="text-muted">optional · uses AI · cached after first run</span>
   </div>`;
 }
 
