@@ -142,6 +142,9 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   topoAiBtn?.addEventListener('click', () => {
+    // Primary action: regenerate multiple CVE-labeled attack vectors on the map
+    if (typeof window.__regenAttackVectors === 'function') { window.__regenAttackVectors(); return; }
+    // Fallback: open a conversational topology analysis in the chat
     const topo = window.__savedData?.topology ?? null;
     const cvs  = window.__cveData ?? (window.__savedData
       ? { cves: window.__savedData.cves, counts: window.__savedData.counts } : null);

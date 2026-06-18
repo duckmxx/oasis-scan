@@ -1910,6 +1910,17 @@ document.getElementById('topo-rebuild-btn')?.addEventListener('click', () => {
   if (_lastReport) runTopologyBuild();
 });
 
+// Force a fresh AI pass that draws multiple CVE-labeled attack vectors on the map
+window.__regenAttackVectors = function () {
+  const topo = window.__lastTopo || _savedTopology || window.__savedData?.topology;
+  const cvs  = _cveData || (window.__savedData
+    ? { cves: window.__savedData.cves, counts: window.__savedData.counts } : null);
+  if (!topo) { showToast('Open the Attack Map first to build the topology', 'warning'); return; }
+  if (!cvs)  { showToast('No CVE data yet — run a scan first', 'warning'); return; }
+  showToast('Generating AI attack vectors…', 'loading', { duration: 2500 });
+  buildAIAttackNarrative(topo, cvs, { force: true });
+};
+
 async function runTopologyFromSaved(topo, cveData) {
   const container = document.getElementById('topology-cy');
   if (!container) return;
@@ -2046,28 +2057,13 @@ function renderTopology(topo, cveData, fsDevices, aiPaths) {
     elements.push({ data: { id: 'e-gw-' + fid, source: gateway ? 'router' : 'internet', target: fid, etype: 'lan' } });
   }
 
-  // Attack path edges — AI-specified if available, otherwise fall back to CVE-based heuristic
+  // Attack path edges — AI-specified vectors if available, otherwise CVE-based heuristic
   if (aiPaths) {
-    // AI determined entry source (internet or internal)
-    const entrySrc = aiPaths.attack_source === 'internal' ? (gateway ? 'router' : neighborIds[0]) : 'internet';
-    if (entrySrc) {
-      elements.push({
-        data: { id: 'atk-entry', source: entrySrc, target: 'current', etype: 'attack' },
-        classes: 'attack-path',
-      });
-    }
-    // AI-specified pivot targets (IPs matched back to node IDs)
-    for (const ip of (aiPaths.pivot_targets ?? [])) {
-      const nid = neighborIds.find(nid => {
-        const n = neighbors.find(x => x.ip === ip);
-        return n && nid === 'n-' + n.ip.replace(/[:.]/g, '_');
-      });
-      if (nid) {
-        elements.push({
-          data: { id: 'atk-pivot-' + nid, source: 'current', target: nid, etype: 'pivot' },
-          classes: 'attack-pivot',
-        });
-      }
+    const defs = _attackEdgeDefs(_attackPaths(aiPaths), topo, neighbors);
+    for (const def of defs) {
+      const okSrc = elements.some(e => e.data?.id === def.data.source);
+      const okTgt = elements.some(e => e.data?.id === def.data.target);
+      if (okSrc && okTgt) elements.push(def);
     }
   } else if (hasNetworkCVEs) {
     // Fallback: draw entry from internet + pivot to all visible neighbors
@@ -2112,6 +2108,7 @@ function renderTopology(topo, cveData, fsDevices, aiPaths) {
   });
 
   cy.on('tap', 'node', evt => showTopoNodeInfo(evt.target.data()));
+  cy.on('tap', 'edge', evt => showTopoEdgeInfo(evt.target.data()));
   window._topo_cy = cy;
 }
 
@@ -2225,6 +2222,14 @@ function _topoStyle() {
         'line-dash-pattern':   [12, 6],
         'opacity':              1,
         'z-index':              10,
+        'label':               'data(cveLabel)',
+        'font-size':           '8px',
+        'font-family':         '"JetBrains Mono", monospace',
+        'color':               '#ffd0d8',
+        'text-background-color':   '#08090e',
+        'text-background-opacity': 0.85,
+        'text-background-padding': '2px',
+        'text-rotation':       'autorotate',
       },
     },
     {
@@ -2239,6 +2244,15 @@ function _topoStyle() {
         'z-index':              9,
       },
     },
+    // Per-vector colors (up to 4 distinct AI-generated attack paths)
+    { selector: '.attack-path-0',  style: { 'line-color': '#ff3860', 'target-arrow-color': '#ff3860', 'color': '#ffd0d8' } },
+    { selector: '.attack-path-1',  style: { 'line-color': '#ff9500', 'target-arrow-color': '#ff9500', 'color': '#ffe6c2' } },
+    { selector: '.attack-path-2',  style: { 'line-color': '#a855f7', 'target-arrow-color': '#a855f7', 'color': '#ecd9ff' } },
+    { selector: '.attack-path-3',  style: { 'line-color': '#22d3ee', 'target-arrow-color': '#22d3ee', 'color': '#cdf6fd' } },
+    { selector: '.attack-pivot-0', style: { 'line-color': '#ff3860', 'target-arrow-color': '#ff3860' } },
+    { selector: '.attack-pivot-1', style: { 'line-color': '#ff9500', 'target-arrow-color': '#ff9500' } },
+    { selector: '.attack-pivot-2', style: { 'line-color': '#a855f7', 'target-arrow-color': '#a855f7' } },
+    { selector: '.attack-pivot-3', style: { 'line-color': '#22d3ee', 'target-arrow-color': '#22d3ee' } },
   ];
 }
 
@@ -2266,23 +2280,73 @@ function showTopoNodeInfo(d) {
   panel.style.display = 'block';
 }
 
+/* --- Multi-vector attack paths --- */
+const _ATTACK_COLORS = ['#ff3860', '#ff9500', '#a855f7', '#22d3ee'];
+
+// Normalize AI output to an array of path objects (handles old single-path shape)
+function _attackPaths(aiPaths) {
+  if (!aiPaths) return [];
+  if (Array.isArray(aiPaths)) return aiPaths;
+  if (Array.isArray(aiPaths.attack_paths)) return aiPaths.attack_paths;
+  if (aiPaths.attack_source || aiPaths.entry_cves || aiPaths.pivot_targets) return [aiPaths];
+  return [];
+}
+
+// Build cytoscape edge definitions for each attack vector (CVE-annotated, colored)
+function _attackEdgeDefs(paths, topo, neighbors) {
+  const defs = [];
+  paths.forEach((p, i) => {
+    const idx      = i % _ATTACK_COLORS.length;
+    const entrySrc = p.attack_source === 'internal' ? (topo.gateway ? 'router' : null) : 'internet';
+    const cves     = (p.entry_cves || []).filter(Boolean);
+    const cveLabel = cves.length ? (cves.length === 1 ? cves[0] : `${cves[0]} +${cves.length - 1}`) : '';
+    const vname    = p.name || `Vector ${i + 1}`;
+    if (entrySrc) {
+      defs.push({
+        data: { id: `atk-entry-${i}`, source: entrySrc, target: 'current', etype: 'attack',
+                pathIndex: idx, cves: cves.join(', '), cveLabel, vector: vname },
+        classes: `attack-path attack-path-${idx}`,
+      });
+    }
+    for (const ip of (p.pivot_targets || [])) {
+      const n = (neighbors || []).find(x => x.ip === ip);
+      if (!n) continue;
+      const nid = 'n-' + n.ip.replace(/[:.]/g, '_');
+      defs.push({
+        data: { id: `atk-pivot-${i}-${nid}`, source: 'current', target: nid, etype: 'pivot',
+                pathIndex: idx, cves: cves.join(', '), cveLabel, vector: vname },
+        classes: `attack-pivot attack-pivot-${idx}`,
+      });
+    }
+  });
+  return defs;
+}
+
+function showTopoEdgeInfo(d) {
+  const panel = document.getElementById('topo-node-info');
+  if (!panel || (d.etype !== 'attack' && d.etype !== 'pivot')) return;
+  const kind  = d.etype === 'attack' ? 'Entry vector' : 'Lateral movement';
+  const color = _ATTACK_COLORS[d.pathIndex ?? 0] || '#ff3860';
+  panel.innerHTML = `<strong style="color:${color}">${escapeHtml(d.vector || 'Attack path')}</strong> — ${kind}` +
+    (d.cves ? ` · exploits <code>${escapeHtml(d.cves)}</code>` : ' · no specific CVE required');
+  panel.style.display = 'block';
+}
+
 function _renderAttackNarrativeResult(narrative, aiPaths, topo, subline, steps) {
-  // Re-render graph with AI-specified attack paths
+  // Re-render graph with AI-specified attack vectors (multiple, CVE-annotated)
   if (aiPaths && window._topo_cy) {
     const cy        = window._topo_cy;
     const neighbors = (topo.neighbors || []).filter(n => n.ip && n.ip !== topo.gateway);
     cy.elements('.attack-path, .attack-pivot').remove();
-    const src = aiPaths.attack_source === 'internal' ? (topo.gateway ? 'router' : null) : 'internet';
-    if (src && cy.getElementById(src).length && cy.getElementById('current').length) {
-      cy.add({ data: { id: 'atk-entry', source: src, target: 'current', etype: 'attack' }, classes: 'attack-path' });
-    }
-    for (const ip of (aiPaths.pivot_targets ?? [])) {
-      const nid = 'n-' + ip.replace(/[:.]/g, '_');
-      if (cy.getElementById(nid).length) {
-        cy.add({ data: { id: 'atk-pivot-' + nid, source: 'current', target: nid, etype: 'pivot' }, classes: 'attack-pivot' });
+    const defs = _attackEdgeDefs(_attackPaths(aiPaths), topo, neighbors);
+    for (const def of defs) {
+      if (cy.getElementById(def.data.source).length && cy.getElementById(def.data.target).length) {
+        cy.add(def);
       }
     }
     cy.style(_topoStyle());
+    cy.removeListener('tap', 'edge');
+    cy.on('tap', 'edge', evt => showTopoEdgeInfo(evt.target.data()));
   }
 
   const lines = narrative.split('\n').filter(l => l.trim());
@@ -2290,16 +2354,23 @@ function _renderAttackNarrativeResult(narrative, aiPaths, topo, subline, steps) 
     ? lines.map(l => `<p class="attack-step">${escapeHtml(l.trim())}</p>`).join('')
     : `<p class="attack-step" style="color:var(--text-secondary)">No narrative returned.</p>`;
 
-  if (subline) subline.textContent = 'AI-generated · based on live CVE data + network topology';
+  if (subline) {
+    const n = _attackPaths(aiPaths).length;
+    subline.textContent = n > 1
+      ? `AI-generated · ${n} attack vectors · click an edge to see the CVEs it exploits`
+      : 'AI-generated · based on live CVE data + network topology';
+  }
 }
 
-async function buildAIAttackNarrative(topo, cveData) {
+async function buildAIAttackNarrative(topo, cveData, opts = {}) {
   const panel   = document.getElementById('attack-narrative-panel');
   const steps   = document.getElementById('attack-steps');
   const subline = document.getElementById('attack-narrative-sub');
   if (!panel || !steps) return;
   if (!cveData) { panel.style.display = 'none'; return; }
 
+  // Remember the last topo so the "AI Attack Vectors" button can regenerate
+  window.__lastTopo = topo;
   panel.style.display = '';
 
   const hostname  = topo.hostname || 'this device';
@@ -2314,9 +2385,9 @@ async function buildAIAttackNarrative(topo, cveData) {
   const cacheKey      = `atk_${hostname}_${critCount}c_${highCount}h_${neighborCount}n`
     .replace(/[^a-zA-Z0-9_-]/g, '_');
 
-  // 1. Check localStorage first (instant, no Firestore rules needed)
+  // 1. Check localStorage first (instant) — unless a fresh regen was requested
   try {
-    const raw = localStorage.getItem('ai_narrative_' + cacheKey);
+    const raw = opts.force ? null : localStorage.getItem('ai_narrative_' + cacheKey);
     if (raw) {
       const cached = JSON.parse(raw);
       // Expire after 24 hours
@@ -2369,11 +2440,11 @@ async function buildAIAttackNarrative(topo, cveData) {
 `You are a penetration tester writing an attack path report. Given the scan data below, output EXACTLY two sections:
 
 SECTION 1 — one line of JSON (no markdown, no explanation):
-{"attack_source":"internet","entry_cves":["CVE-ID-1"],"pivot_targets":["ip1","ip2"]}
-Use "internet" or "internal" for attack_source. List only CVE IDs actually present in the data for entry_cves. List only IPs from NEIGHBORS for pivot_targets (max 3 most vulnerable).
+{"attack_paths":[{"name":"short label","attack_source":"internet","entry_cves":["CVE-ID-1"],"pivot_targets":["ip1"]}]}
+Provide 2-3 DISTINCT realistic attack vectors when the data supports it — for example an internet-facing remote-code-execution path AND a local privilege-escalation path, or two different entry CVEs. Each vector has: a short "name" (3-4 words), "attack_source" ("internet" or "internal"), "entry_cves" (only CVE IDs actually present in the data), and "pivot_targets" (only IPs from NEIGHBORS, max 3). If only one realistic vector exists, return just one.
 
 SECTION 2 — after the exact separator line "---NARRATIVE---":
-Write 4-6 numbered steps describing the realistic attack chain for this specific host. Reference actual CVE IDs, package names, service names, and neighbor IPs from the data. Be specific and technical. End with one concrete remediation step.
+Write a short numbered analysis (4-8 steps). Describe EACH attack vector by its name, then the realistic chain. Reference actual CVE IDs, package names, service names, and neighbor IPs from the data. Be specific and technical. End with one concrete remediation step.
 
 === SCAN DATA ===
 HOST: ${hostname}
@@ -2443,8 +2514,8 @@ SUID FILES: ${suid.length} found`;
       const jsonPart = fullText.slice(0, sepIdx).trim();
       narrative      = fullText.slice(sepIdx + 15).trim();
       try {
-        // Find first { … } in the json part
-        const m = jsonPart.match(/\{[\s\S]*?\}/);
+        // Greedy match captures the whole (possibly nested) JSON object
+        const m = jsonPart.match(/\{[\s\S]*\}/);
         if (m) aiPaths = JSON.parse(m[0]);
       } catch {}
     }
