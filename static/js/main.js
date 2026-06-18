@@ -193,7 +193,7 @@ document.querySelectorAll('.nav-item[data-section]').forEach(item => {
         });
       }
     }
-    const label = item.textContent.replace(/[⊞⚠⊡⊟⬡✦↺⚙]/g, '').trim();
+    const label = item.textContent.replace(/[⊞⚠⊡⊟⬡◇✚▷⊙✦↺]/g, '').trim();
     const titleEl = document.getElementById('topbar-section-label');
     if (titleEl) titleEl.textContent = label;
   });
@@ -882,7 +882,7 @@ function _renderAllPackagesGrid(pkgList, foreign, match, totalCount, manager) {
 
   grid.innerHTML = shown.map(p => `
     <div class="app-card" data-pkg="${escapeHtml(p.name)}">
-      <div class="app-icon">📦</div>
+      <div class="app-icon">${escapeHtml((p.name || '?').charAt(0).toUpperCase())}</div>
       <div class="app-info">
         <div class="app-name">${escapeHtml(p.name)}</div>
         <div class="app-version">${escapeHtml(p.version ?? '')}</div>
@@ -1176,11 +1176,11 @@ function _wireCVEExpand(tbody) {
               </button>
               <button class="btn btn-success btn-sm" style="margin-left:auto"
                 onclick="window.__gotoPatch('${escapeHtml(d.cvePkg)}','${escapeHtml(cveId)}')">
-                🛠 Patch this →
+                Patch this →
               </button>
               <button class="btn btn-primary btn-sm"
                 onclick="window.askAICVE?.('${escapeHtml(cveId)}','${escapeHtml(d.cvePkg)}','${escapeHtml(d.cveInstalled)}','${escapeHtml(d.cveFixed)}','${escapeHtml(row.dataset.severity)}','${escapeHtml(summary)}')">
-                🤖 Ask AI
+                Ask AI
               </button>
             </div>
           </div>
@@ -1333,7 +1333,7 @@ function renderPatches() {
         </div>
         <div class="patch-ai-output" style="display:none"></div>
         <div class="patch-actions">
-          <button class="btn btn-primary btn-sm patch-ai-btn">🤖 Ask AI to patch</button>
+          <button class="btn btn-primary btn-sm patch-ai-btn">Ask AI to patch</button>
           <button class="btn btn-success btn-sm patch-toggle-btn" style="margin-left:auto">
             ${isDone ? 'Mark as not done' : '✓ Mark as patched'}
           </button>
@@ -1410,7 +1410,7 @@ async function _aiPatchPackage(pkg, host, family) {
     });
     const data = await res.json();
     if (!data.ok) throw new Error(data.error || 'AI request failed');
-    out.innerHTML = `<div class="patch-ai-head">🤖 Remediation plan</div>
+    out.innerHTML = `<div class="patch-ai-head">Remediation plan</div>
       <div class="patch-ai-body">${_mdLite(data.text || 'No response.')}</div>`;
     toast.update(`Patch plan ready for ${pkg}`, 'success');
   } catch (err) {
@@ -1444,6 +1444,32 @@ function _updatePatchBadge() {
   }
 }
 window.__updatePatchBadge = _updatePatchBadge;
+
+// Deep-link to a specific CVE: jump to the CVE tab, clear filters, expand its detail
+window.__gotoCVE = function (cveId) {
+  const nav = document.querySelector('.nav-item[data-section="section-cves"]');
+  if (nav) nav.click();
+  setTimeout(() => {
+    document.querySelectorAll('#cve-filter-bar .filter-chip.active, #cve-type-filter-bar .filter-chip.active')
+      .forEach(c => c.classList.remove('active'));
+    const allChip = document.querySelector('#cve-dev-chips .sec-dev-chip[data-device=""]');
+    if (allChip) {
+      document.querySelectorAll('#cve-dev-chips .sec-dev-chip').forEach(c => c.classList.remove('active'));
+      allChip.classList.add('active');
+    }
+    const search = document.getElementById('cve-search');
+    if (search) search.value = '';
+    filterCVETable();
+
+    const row = document.querySelector(`.cve-row[data-cve-id="${CSS.escape(cveId)}"]`);
+    if (!row) { showToast(`${cveId} is not in the current results`, 'warning'); return; }
+    row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    row.classList.add('cve-row-flash');
+    setTimeout(() => row.classList.remove('cve-row-flash'), 1600);
+    const next = row.nextElementSibling;
+    if (!(next && next.classList.contains('cve-detail-row'))) row.querySelector('.cve-expand-btn')?.click();
+  }, 140);
+};
 
 // Deep-link from a CVE row: jump to Patches, focus the package, run AI
 window.__gotoPatch = function (pkg, cveId) {
@@ -2256,6 +2282,14 @@ function _topoStyle() {
         'line-dash-pattern':   [6, 3],
         'opacity':              0.85,
         'z-index':              9,
+        'label':               'data(cveLabel)',
+        'font-size':           '7px',
+        'font-family':         '"JetBrains Mono", monospace',
+        'color':               '#cbd5e1',
+        'text-background-color':   '#08090e',
+        'text-background-opacity': 0.8,
+        'text-background-padding': '2px',
+        'text-rotation':       'autorotate',
       },
     },
     // Per-vector colors (up to 4 distinct AI-generated attack paths)
@@ -2306,30 +2340,54 @@ function _attackPaths(aiPaths) {
   return [];
 }
 
-// Build cytoscape edge definitions for each attack vector (CVE-annotated, colored)
+// Resolve an AI node reference ("internet" / "current" / gateway / neighbour IP) to a graph node id
+function _resolveNodeId(ref, topo, neighbors) {
+  if (!ref) return null;
+  const r = String(ref).trim().toLowerCase();
+  if (['internet', 'external', 'attacker', 'wan'].includes(r)) return 'internet';
+  if (['current', 'host', 'this', 'this device', 'localhost', 'me'].includes(r)) return 'current';
+  if (topo.hostname && r === topo.hostname.toLowerCase()) return 'current';
+  const myIp = topo.my_ips?.[0]?.ip;
+  if (myIp && r === myIp.toLowerCase()) return 'current';
+  if (topo.gateway && (r === topo.gateway.toLowerCase() || r === 'gateway' || r === 'router')) return 'router';
+  const n = (neighbors || []).find(x => x.ip && x.ip.toLowerCase() === r);
+  if (n) return 'n-' + n.ip.replace(/[:.]/g, '_');
+  return null;
+}
+
+// Build cytoscape edge definitions forming a kill-web of interconnected attack edges.
+// Each vector may carry an explicit `edges` graph; older {entry_cves,pivot_targets} is synthesised.
 function _attackEdgeDefs(paths, topo, neighbors) {
   const defs = [];
+  let seq = 0;
   paths.forEach((p, i) => {
-    const idx      = i % _ATTACK_COLORS.length;
-    const entrySrc = p.attack_source === 'internal' ? (topo.gateway ? 'router' : null) : 'internet';
-    const cves     = (p.entry_cves || []).filter(Boolean);
-    const cveLabel = cves.length ? (cves.length === 1 ? cves[0] : `${cves[0]} +${cves.length - 1}`) : '';
-    const vname    = p.name || `Vector ${i + 1}`;
-    if (entrySrc) {
-      defs.push({
-        data: { id: `atk-entry-${i}`, source: entrySrc, target: 'current', etype: 'attack',
-                pathIndex: idx, cves: cves.join(', '), cveLabel, vector: vname },
-        classes: `attack-path attack-path-${idx}`,
-      });
+    const idx   = i % _ATTACK_COLORS.length;
+    const vname = p.name || `Vector ${i + 1}`;
+
+    let edges = Array.isArray(p.edges) ? p.edges : null;
+    if (!edges) {                                   // backward-compat synthesis
+      edges = [];
+      const entryFrom = p.attack_source === 'internal' ? (topo.gateway || 'router') : 'internet';
+      edges.push({ from: entryFrom, to: 'current', cve: (p.entry_cves || [])[0] || '', technique: 'Initial access' });
+      for (const ip of (p.pivot_targets || []))
+        edges.push({ from: 'current', to: ip, cve: '', technique: 'Lateral movement' });
     }
-    for (const ip of (p.pivot_targets || [])) {
-      const n = (neighbors || []).find(x => x.ip === ip);
-      if (!n) continue;
-      const nid = 'n-' + n.ip.replace(/[:.]/g, '_');
+
+    for (const e of edges) {
+      const src = _resolveNodeId(e.from, topo, neighbors);
+      const tgt = _resolveNodeId(e.to, topo, neighbors);
+      if (!src || !tgt || src === tgt) continue;
+      const isEntry  = src === 'internet';
+      const cves     = (Array.isArray(e.cves) ? e.cves : (e.cve ? [e.cve] : [])).filter(Boolean);
+      const cveLabel = cves[0] ? (cves.length > 1 ? `${cves[0]} +${cves.length - 1}` : cves[0]) : (e.technique || '');
       defs.push({
-        data: { id: `atk-pivot-${i}-${nid}`, source: 'current', target: nid, etype: 'pivot',
-                pathIndex: idx, cves: cves.join(', '), cveLabel, vector: vname },
-        classes: `attack-pivot attack-pivot-${idx}`,
+        data: {
+          id: `atk-${i}-${seq++}`, source: src, target: tgt,
+          etype: isEntry ? 'attack' : 'pivot',
+          pathIndex: idx, vector: vname,
+          cves: cves.join(', '), cveLabel, technique: e.technique || '',
+        },
+        classes: `${isEntry ? 'attack-path attack-path' : 'attack-pivot attack-pivot'}-${idx}`,
       });
     }
   });
@@ -2339,10 +2397,16 @@ function _attackEdgeDefs(paths, topo, neighbors) {
 function showTopoEdgeInfo(d) {
   const panel = document.getElementById('topo-node-info');
   if (!panel || (d.etype !== 'attack' && d.etype !== 'pivot')) return;
-  const kind  = d.etype === 'attack' ? 'Entry vector' : 'Lateral movement';
+  const kind  = d.etype === 'attack' ? 'Initial access' : 'Lateral movement';
   const color = _ATTACK_COLORS[d.pathIndex ?? 0] || '#ff3860';
-  panel.innerHTML = `<strong style="color:${color}">${escapeHtml(d.vector || 'Attack path')}</strong> — ${kind}` +
-    (d.cves ? ` · exploits <code>${escapeHtml(d.cves)}</code>` : ' · no specific CVE required');
+  const cveLinks = (d.cves ? d.cves.split(',').map(s => s.trim()).filter(Boolean) : [])
+    .map(id => `<a class="cve-link" onclick="window.__gotoCVE('${escapeHtml(id)}')">${escapeHtml(id)}</a>`)
+    .join('  ');
+  panel.innerHTML =
+    `<span class="topo-edge-vector" style="color:${color}">${escapeHtml(d.vector || 'Attack path')}</span>` +
+    `<span class="topo-edge-kind">${kind}${d.technique ? ' · ' + escapeHtml(d.technique) : ''}</span>` +
+    (cveLinks ? `<span class="topo-edge-cves">Exploits ${cveLinks}</span>`
+              : `<span class="topo-edge-cves text-muted">No specific CVE required</span>`);
   panel.style.display = 'block';
 }
 
@@ -2363,9 +2427,11 @@ function _renderAttackNarrativeResult(narrative, aiPaths, topo, subline, steps) 
     cy.on('tap', 'edge', evt => showTopoEdgeInfo(evt.target.data()));
   }
 
+  const linkifyCVE = s => s.replace(/\b(CVE-\d{4}-\d{4,7}|ASA-\d{4}-\d+)\b/g,
+    m => `<a class="cve-link" onclick="window.__gotoCVE('${m}')">${m}</a>`);
   const lines = narrative.split('\n').filter(l => l.trim());
   steps.innerHTML = lines.length > 0
-    ? lines.map(l => `<p class="attack-step">${escapeHtml(l.trim())}</p>`).join('')
+    ? lines.map(l => `<p class="attack-step">${linkifyCVE(escapeHtml(l.trim()))}</p>`).join('')
     : `<p class="attack-step" style="color:var(--text-secondary)">No narrative returned.</p>`;
 
   if (subline) {
@@ -2454,11 +2520,12 @@ async function buildAIAttackNarrative(topo, cveData, opts = {}) {
 `You are a penetration tester writing an attack path report. Given the scan data below, output EXACTLY two sections:
 
 SECTION 1 — one line of JSON (no markdown, no explanation):
-{"attack_paths":[{"name":"short label","attack_source":"internet","entry_cves":["CVE-ID-1"],"pivot_targets":["ip1"]}]}
-Provide 2-3 DISTINCT realistic attack vectors when the data supports it — for example an internet-facing remote-code-execution path AND a local privilege-escalation path, or two different entry CVEs. Each vector has: a short "name" (3-4 words), "attack_source" ("internet" or "internal"), "entry_cves" (only CVE IDs actually present in the data), and "pivot_targets" (only IPs from NEIGHBORS, max 3). If only one realistic vector exists, return just one.
+{"attack_paths":[{"name":"short label","edges":[{"from":"internet","to":"current","cve":"CVE-ID","technique":"Remote code execution"}]}]}
+Build a KILL WEB: 2-4 distinct attack vectors that together form an INTERCONNECTED graph, not isolated lines. Use MULTIPLE entry sources where realistic (e.g. "internet" for an exposed service AND a vulnerable neighbour as a second foothold). Chain edges so compromise propagates across hosts: internet→current→neighbour→neighbour, and add cross-links between neighbours on the same subnet when plausible.
+Every edge has: "from" and "to" (each MUST be one of: "internet", "current", the gateway IP, or an IP from NEIGHBORS), "cve" (a CVE ID actually present in the data, or "" if none is needed for that hop), and "technique" (3-4 words, e.g. "Remote code execution", "Privilege escalation", "Lateral movement", "ARP spoofing", "Credential reuse"). Only reference CVE IDs and IPs that appear in the data.
 
 SECTION 2 — after the exact separator line "---NARRATIVE---":
-Write a short numbered analysis (4-8 steps). Describe EACH attack vector by its name, then the realistic chain. Reference actual CVE IDs, package names, service names, and neighbor IPs from the data. Be specific and technical. End with one concrete remediation step.
+Write a short numbered analysis (4-8 steps). Walk through each named vector and how the compromise spreads across the web. Reference actual CVE IDs, package names, service names, and neighbour IPs. Be specific and technical. End with one concrete remediation step.
 
 === SCAN DATA ===
 HOST: ${hostname}

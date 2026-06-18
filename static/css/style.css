@@ -2583,8 +2583,57 @@ ul { list-style: none; }
   20%, 60% { box-shadow: 0 0 0 2px var(--accent); border-color: var(--accent); }
 }
 
+/* ── CVE deep-links + edge info ─────────────────────────────────────── */
+.cve-link { color: var(--accent); cursor: pointer; border-bottom: 1px solid transparent; transition: border-color var(--transition); }
+.cve-link:hover { border-bottom-color: var(--accent); }
+.cve-row-flash { animation: cveFlash 1.6s ease; }
+@keyframes cveFlash { 0%, 100% { background: transparent; } 25%, 60% { background: var(--accent-glow); } }
+#topo-node-info .topo-edge-vector { font-weight: 600; display: block; letter-spacing: -0.01em; }
+.topo-edge-kind { display: block; font-size: 12px; color: var(--text-secondary); margin-top: 2px; }
+.topo-edge-cves { display: block; font-size: 12px; margin-top: 7px; font-family: var(--font-mono); }
+
 /* ── Impact-type filter bar ─────────────────────────────────────────── */
 .filter-bar-type { flex-wrap: wrap; gap: 6px; padding: 10px 20px 4px; }
 .filter-bar-label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.08em; margin-right: 4px; align-self: center; }
 .filter-chip.type-chip { font-size: 11px; }
 .filter-chip.type-chip.active { background: var(--accent-glow); color: var(--accent); border-color: var(--accent-dim); }
+
+/* =========================================================
+   Modern refinement pass — monochrome icons, hairlines,
+   tighter type (Apple-style; same color scheme)
+   ========================================================= */
+
+/* Icons inherit text color instead of rendering as emoji */
+.nav-icon, .panel-title .icon, .posture-icon, .empty-icon, .integrity-banner-icon {
+  font-style: normal; font-weight: 400;
+}
+.nav-item .nav-icon { color: var(--text-muted); transition: color var(--transition); }
+.nav-item:hover .nav-icon { color: var(--text-secondary); }
+.nav-item.active .nav-icon { color: var(--accent); }
+.panel-title { letter-spacing: -0.012em; font-weight: 600; }
+.panel-title .icon { color: var(--text-muted); opacity: 0.85; margin-right: 3px; font-size: 0.92em; }
+
+/* App tiles: clean letter-mark instead of a package emoji */
+.app-icon {
+  font-family: var(--font-mono); font-weight: 700; font-size: 15px;
+  color: var(--accent);
+  background: linear-gradient(135deg, rgba(0,212,255,0.13), rgba(0,212,255,0.03));
+  border: 1px solid var(--border-accent); border-radius: 9px;
+}
+
+/* Buttons: a touch more refined, less shouty */
+.btn { letter-spacing: -0.005em; }
+.btn-primary { font-weight: 600; }
+
+/* Attack narrative: spacious reading column */
+#attack-narrative-panel .panel-body { padding: 22px 26px; }
+.attack-step { line-height: 1.62; color: var(--text-secondary); margin-bottom: 11px; }
+.attack-step:last-child { margin-bottom: 0; }
+
+/* Topology info panel reads like a clean card */
+.topo-node-info { line-height: 1.5; }
+
+/* Patch playbook: a little more air */
+.patch-item { border-radius: var(--radius-md); }
+.patch-header { padding: 13px 16px; }
+.patch-ai-head { text-transform: none; }

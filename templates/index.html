@@ -37,7 +37,7 @@
         <span class="nav-badge hidden" id="nav-cve-badge">0</span>
       </li>
       <li class="nav-item" data-section="section-integrity">
-        <span class="nav-icon">🔒</span> System Audit
+        <span class="nav-icon">◇</span> System Audit
         <span class="nav-badge hidden" id="nav-integrity-badge">!</span>
       </li>
       <li class="nav-item" data-section="section-apps">
@@ -47,7 +47,7 @@
         <span class="nav-icon">⬡</span> Attack Map
       </li>
       <li class="nav-item" data-section="section-patches">
-        <span class="nav-icon">⚕</span> Patches
+        <span class="nav-icon">✚</span> Patches
         <span class="nav-badge hidden" id="nav-patch-badge">0</span>
       </li>
     </ul>
@@ -63,10 +63,10 @@
     <p class="sidebar-section-label">Tools</p>
     <ul class="sidebar-nav">
       <li class="nav-item" data-section="section-run">
-        <span class="nav-icon">⬇</span> Run
+        <span class="nav-icon">▷</span> Run
       </li>
       <li class="nav-item" data-section="section-settings">
-        <span class="nav-icon">⚙</span> Settings
+        <span class="nav-icon">⊙</span> Settings
       </li>
     </ul>
 
@@ -154,7 +154,7 @@
         <!-- Security posture (integrity summary) -->
         <div class="panel">
           <div class="panel-header">
-            <div class="panel-title"><span class="icon">🔒</span> Security Posture</div>
+            <div class="panel-title"><span class="icon">◇</span> Security Posture</div>
             <button class="btn btn-ghost btn-sm" data-jump="section-integrity">System Audit →</button>
           </div>
           <div class="panel-body">
@@ -229,7 +229,7 @@
       <!-- Known Malicious Packages -->
       <div class="panel">
         <div class="panel-header">
-          <div class="panel-title"><span class="icon">☠</span> Known Malicious Packages</div>
+          <div class="panel-title"><span class="icon">◆</span> Known Malicious Packages</div>
           <span class="text-muted" style="font-size:12px" id="integrity-mal-count">—</span>
         </div>
         <div class="panel-body no-pad">
@@ -246,7 +246,7 @@
             <tbody id="integrity-mal-tbody">
               <tr><td colspan="5">
                 <div class="empty-state">
-                  <div class="empty-icon">☠</div>
+                  <div class="empty-icon">◆</div>
                   <div>Run a scan to check for malicious packages.</div>
                 </div>
               </td></tr>
@@ -312,12 +312,12 @@
       <!-- Running Services -->
       <div class="panel">
         <div class="panel-header">
-          <div class="panel-title"><span class="icon">⚙</span> Running Services</div>
+          <div class="panel-title"><span class="icon">⊙</span> Running Services</div>
           <span class="text-muted" style="font-size:12px" id="integrity-svc-count">—</span>
         </div>
         <div class="panel-body" id="integrity-svc-body">
           <div class="empty-state">
-            <div class="empty-icon">⚙</div>
+            <div class="empty-icon">⊙</div>
             <div>Run a scan to list running services.</div>
           </div>
         </div>
@@ -403,7 +403,7 @@
 
       <div class="panel">
         <div class="panel-header">
-          <div class="panel-title"><span class="icon">⚕</span> Patch Playbook</div>
+          <div class="panel-title"><span class="icon">✚</span> Patch Playbook</div>
           <div style="display:flex;gap:8px;align-items:center">
             <label class="patch-toggle"><input type="checkbox" id="patch-hide-done"> Hide done</label>
             <button class="btn btn-ghost btn-sm" id="patch-reset-btn">Reset progress</button>
@@ -411,7 +411,7 @@
         </div>
         <div class="panel-body" id="patch-list">
           <div class="empty-state">
-            <div class="empty-icon">⚕</div>
+            <div class="empty-icon">✚</div>
             <div>No vulnerable packages yet — run a scan to build your patch to-do list.</div>
           </div>
         </div>
@@ -530,7 +530,7 @@
               <span><span class="topo-line-sample pivot"></span>Lateral move</span>
               <span class="text-muted" style="font-size:11px">· click an edge for its CVEs</span>
             </div>
-            <button class="btn btn-ghost btn-sm" id="topo-ai-btn">🤖 AI Attack Vectors</button>
+            <button class="btn btn-ghost btn-sm" id="topo-ai-btn">AI Attack Vectors</button>
             <button class="btn btn-ghost btn-sm" id="topo-rebuild-btn">↺ Rebuild</button>
           </div>
         </div>
@@ -628,20 +628,20 @@
       <!-- Download cards -->
       <div class="panel">
         <div class="panel-header">
-          <div class="panel-title"><span class="icon">⬇</span> Downloads</div>
+          <div class="panel-title"><span class="icon">▷</span> Downloads</div>
         </div>
         <div class="panel-body">
           <div class="run-dl-grid">
 
             <!-- GUI -->
             <div class="run-dl-card">
-              <div class="run-dl-icon">🖥</div>
+              <div class="run-dl-icon">▪</div>
               <div class="run-dl-name">Desktop GUI</div>
               <div class="run-dl-desc">Full graphical scanner with login, animated scan progress, and results view. Requires Python 3.10+ and Tkinter.</div>
               <div class="run-dl-badges">
                 <span class="run-badge run-badge-linux">Linux</span>
               </div>
-              <a href="/download/gui.py" class="btn btn-primary btn-sm run-dl-btn">⬇ Download gui.py</a>
+              <a href="/download/gui.py" class="btn btn-primary btn-sm run-dl-btn">▷ Download gui.py</a>
             </div>
 
             <!-- CLI -->
@@ -652,7 +652,7 @@
               <div class="run-dl-badges">
                 <span class="run-badge run-badge-linux">Linux</span>
               </div>
-              <a href="/download/scanner.py" class="btn btn-ghost btn-sm run-dl-btn">⬇ Download scanner.py</a>
+              <a href="/download/scanner.py" class="btn btn-ghost btn-sm run-dl-btn">▷ Download scanner.py</a>
             </div>
 
             <!-- Windows placeholder -->
@@ -663,7 +663,7 @@
               <div class="run-dl-badges">
                 <span class="run-badge run-badge-soon">Coming Soon</span>
               </div>
-              <button class="btn btn-ghost btn-sm run-dl-btn" disabled>⬇ Not yet available</button>
+              <button class="btn btn-ghost btn-sm run-dl-btn" disabled>▷ Not yet available</button>
             </div>
 
             <!-- macOS placeholder -->
@@ -674,7 +674,7 @@
               <div class="run-dl-badges">
                 <span class="run-badge run-badge-soon">Coming Soon</span>
               </div>
-              <button class="btn btn-ghost btn-sm run-dl-btn" disabled>⬇ Not yet available</button>
+              <button class="btn btn-ghost btn-sm run-dl-btn" disabled>▷ Not yet available</button>
             </div>
 
           </div>
@@ -1054,7 +1054,7 @@ curl -O https://scanoasis.tech/download/gui.py</code></pre>
           const scanDate = d.createdAt?.toDate?.()?.toLocaleString()
                         ?? (d.scanned_at ? new Date(d.scanned_at).toLocaleString() : '—');
           const memTotalGB = d.mem_total ? (d.mem_total / (1024 ** 3)).toFixed(1) + ' GiB' : '?';
-          const distroIcon = { arch: '🐧', debian: '🐧', rhel: '🎩' }[d.distro_family] ?? '🖥';
+          const distroIcon = { arch: '▪', debian: '▪', rhel: '▪' }[d.distro_family] ?? '▪';
 
           // CVE badge row (only shown if a CVE scan has been run)
           const hasCveData  = d.critical !== undefined;
@@ -1392,7 +1392,7 @@ curl -O https://scanoasis.tech/download/gui.py</code></pre>
       <div class="ai-msg ai-msg-assistant">
         <div class="ai-msg-content">
           Good day, sir. J.A.R.V.I.S. is online and all systems are nominal.<br><br>
-          I'm standing by for your instructions. You may click <strong>🤖 Ask AI</strong> on any vulnerability for a threat assessment and remediation protocol. You can also ask me to analyse your network topology for an attack surface briefing.<br><br>
+          I'm standing by for your instructions. You may click <strong>Ask AI</strong> on any vulnerability for a threat assessment and remediation protocol. You can also ask me to analyse your network topology for an attack surface briefing.<br><br>
           Shall we begin?
         </div>
       </div>
