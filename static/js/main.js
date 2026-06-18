@@ -40,14 +40,49 @@ document.querySelectorAll('.nav-item[data-section]').forEach(item => {
     if (target === 'section-devices' && window.__deviceCache) {
       buildDeviceNetworkMap(Object.values(window.__deviceCache));
     }
-    if (target === 'section-cves' && !_cveData && window.__savedData?.cves?.length > 0) {
-      _cveData = { cves: window.__savedData.cves, counts: window.__savedData.counts };
-      populateCVEs(window.__savedData.cves, window.__savedData.counts);
+    if (target === 'section-cves') {
+      if (!_cveData && window.__savedData?.cves?.length > 0) {
+        _cveData = { cves: window.__savedData.cves, counts: window.__savedData.counts };
+      }
+      renderAllCVEs();
     }
-    if (target === 'section-apps' && !_lastReport) {
-      if (typeof window.__loadPackages === 'function') {
-        window.__loadPackages().then(data => {
-          if (data) _populateApps(data.packages, data.foreign, data.count, data.manager, ' · from last scan');
+    if (target === 'section-apps') {
+      _renderAppsToolbar();
+      if (!_lastReport && !Object.keys(_appCache).length) {
+        if (typeof window.__loadPackages === 'function') {
+          window.__loadPackages().then(data => {
+            if (data) _populateApps(data.packages, data.foreign, data.count, data.manager, ' · from last scan');
+          });
+        }
+      }
+    }
+    if (target === 'section-integrity') {
+      // Load all devices that have integrity data and build selector
+      if (typeof window.__loadIntegrityDevices === 'function') {
+        window.__loadIntegrityDevices().then(async devices => {
+          if (devices.length <= 1) return;
+          const toolbar = document.getElementById('integrity-toolbar');
+          const chipBox = document.getElementById('integrity-dev-chips');
+          if (!toolbar || !chipBox) return;
+          // Build chips for all devices with integrity data
+          const currentHost = _lastReport?.os?.hostname || window.__savedData?.hostname;
+          const prefix = `<span style="font-size:11px;color:var(--text-muted);margin-right:4px">Device:</span>`;
+          chipBox.innerHTML = prefix + devices.map(d => {
+            const tag    = window.__deviceTags?.[d.hostname] || '';
+            const active = d.hostname === currentHost ? ' active' : '';
+            return `<button class="sec-dev-chip${active}" data-host="${escapeHtml(d.hostname)}">${escapeHtml(tag || d.hostname)}</button>`;
+          }).join('');
+          toolbar.classList.remove('hidden');
+          chipBox.querySelectorAll('.sec-dev-chip[data-host]').forEach(chip => {
+            chip.addEventListener('click', async () => {
+              chipBox.querySelectorAll('.sec-dev-chip').forEach(c => c.classList.remove('active'));
+              chip.classList.add('active');
+              chip.textContent = '…';
+              const data = await window.__loadIntegrityData(chip.dataset.host);
+              chip.textContent = escapeHtml(window.__deviceTags?.[chip.dataset.host] || chip.dataset.host);
+              if (data) populateIntegrity(data, chip.dataset.host);
+            });
+          });
         });
       }
     }
@@ -74,10 +109,22 @@ document.querySelectorAll('.filter-chip').forEach(chip => {
 });
 
 function filterCVETable() {
-  const active = [...document.querySelectorAll('.filter-chip.active')].map(c => c.dataset.sev);
+  const activeSev    = [...document.querySelectorAll('.filter-chip.active')].map(c => c.dataset.sev);
+  const activeDevice = document.querySelector('#cve-dev-chips .sec-dev-chip.active')?.dataset.device ?? '';
+  const search       = (document.getElementById('cve-search')?.value ?? '').trim().toLowerCase();
+
   document.querySelectorAll('.cve-row').forEach(row => {
-    const sev = row.dataset.severity;
-    row.style.display = (active.length === 0 || active.includes(sev)) ? '' : 'none';
+    const sevOk    = activeSev.length === 0 || activeSev.includes(row.dataset.severity);
+    const devOk    = !activeDevice || row.dataset.device === activeDevice;
+    const searchOk = !search ||
+      (row.dataset.cveId  ?? '').toLowerCase().includes(search) ||
+      (row.dataset.cvePkg ?? '').toLowerCase().includes(search);
+
+    const visible = sevOk && devOk && searchOk;
+    row.style.display = visible ? '' : 'none';
+    // keep detail row in sync
+    const next = row.nextElementSibling;
+    if (next?.classList.contains('cve-detail-row')) next.style.display = visible ? '' : 'none';
   });
 }
 
@@ -117,6 +164,7 @@ async function startScan() {
     if (!data.ok) throw new Error(data.error || 'Scan failed');
 
     _lastReport = data.report;
+    window.__scanReport = _lastReport;
     populateDashboard(data.report);
 
     const lastScanEl = document.getElementById('last-scan-time');
@@ -173,6 +221,7 @@ async function runCVEAnalysis(report) {
     populateCVEs(data.cves, data.counts);
 
     _cveData = { cves: data.cves, counts: data.counts };
+    window.__cveData = _cveData;
     if (document.getElementById('section-topology') &&
         !document.getElementById('section-topology').classList.contains('hidden')) {
       runTopologyBuild();
@@ -253,8 +302,8 @@ async function runCVEAnalysis(report) {
 async function runIntegrityCheck(report) {
   if (!report) return;
 
-  // Show loading state in all three integrity tables
-  ['integrity-file-tbody', 'integrity-mal-tbody', 'integrity-bin-tbody'].forEach(id => {
+  const loadingIds = ['integrity-mal-tbody', 'integrity-bin-tbody', 'integrity-suid-tbody'];
+  loadingIds.forEach(id => {
     const el = document.getElementById(id);
     if (el) el.innerHTML = `<tr><td colspan="5">
       <div class="empty-state">
@@ -271,9 +320,20 @@ async function runIntegrityCheck(report) {
     });
     const data = await res.json();
     if (!data.ok) throw new Error(data.error || 'Integrity check failed');
-    populateIntegrity(data);
+
+    // Merge suid_files and services from the scan report into the integrity data
+    const extData = {
+      ...data,
+      suid_files: report.suid_files         ?? [],
+      services:   report.services?.running  ?? [],
+    };
+    populateIntegrity(extData, report?.os?.hostname);
+    const hostname = report?.os?.hostname;
+    if (hostname && typeof window.__saveIntegrityData === 'function') {
+      window.__saveIntegrityData(hostname, extData);
+    }
   } catch (err) {
-    ['integrity-file-tbody', 'integrity-mal-tbody', 'integrity-bin-tbody'].forEach(id => {
+    ['integrity-mal-tbody', 'integrity-bin-tbody', 'integrity-suid-tbody'].forEach(id => {
       const el = document.getElementById(id);
       if (el) el.innerHTML = `<tr><td colspan="5">
         <div class="empty-state" style="color:var(--sev-critical)">
@@ -282,104 +342,77 @@ async function runIntegrityCheck(report) {
   }
 }
 
-function populateIntegrity(data) {
-  const sum   = data.summary ?? {};
-  const files = data.file_integrity  ?? [];
-  const mal   = data.malicious       ?? [];
-  const bins  = data.modified_bins   ?? [];
+function populateIntegrity(data, hostname) {
+  const sum  = data.summary       ?? {};
+  const mal  = data.malicious     ?? [];
+  const bins = data.modified_bins ?? [];
+  const suid = data.suid_files    ?? [];
+  const svcs = data.services      ?? [];
 
-  // Top banner
+  // Device chip
+  if (hostname) {
+    const toolbar = document.getElementById('integrity-toolbar');
+    const chipBox = document.getElementById('integrity-dev-chips');
+    if (toolbar && chipBox) {
+      const tag = window.__deviceTags?.[hostname] || '';
+      chipBox.innerHTML = `<span style="font-size:11px;color:var(--text-muted);margin-right:4px">Device:</span>
+        <span class="sec-dev-chip active" style="cursor:default">${escapeHtml(tag || hostname)}</span>`;
+      toolbar.classList.remove('hidden');
+    }
+  }
+
+  // Banner — keyed off malicious/modified_bins; file integrity removed
   const banner = document.getElementById('integrity-banner');
   const icon   = document.getElementById('integrity-banner-icon');
   const title  = document.getElementById('integrity-banner-title');
   const sub    = document.getElementById('integrity-banner-sub');
+  const clean  = (sum.malicious_pkgs ?? 0) === 0 && (sum.modified_bin_files ?? 0) === 0;
 
-  if (sum.clean) {
+  if (clean) {
     if (banner) banner.className = 'integrity-banner integrity-banner-ok';
     if (icon)   icon.textContent  = '✓';
-    if (title)  title.textContent = 'All checks passed — no integrity issues found';
-    if (sub)    sub.textContent   = 'Package files match their checksums. No known malicious packages detected.';
+    if (title)  title.textContent = 'No threats detected';
+    if (sub)    sub.textContent   = `No malicious packages or recently modified binaries. ${suid.length} SUID file${suid.length !== 1 ? 's' : ''} · ${svcs.length} service${svcs.length !== 1 ? 's' : ''} running.`;
   } else {
     if (banner) banner.className = 'integrity-banner integrity-banner-warn';
     if (icon)   icon.textContent  = '⚠';
     const parts = [];
-    if (sum.file_issues        > 0) parts.push(`${sum.file_issues} file integrity issue${sum.file_issues !== 1 ? 's' : ''}`);
-    if (sum.malicious_pkgs     > 0) parts.push(`${sum.malicious_pkgs} known malicious package${sum.malicious_pkgs !== 1 ? 's' : ''}`);
-    if (sum.modified_bin_files > 0) parts.push(`${sum.modified_bin_files} recently modified system binary${sum.modified_bin_files !== 1 ? 's' : ''}`);
+    if ((sum.malicious_pkgs ?? 0)     > 0) parts.push(`${sum.malicious_pkgs} malicious package${sum.malicious_pkgs !== 1 ? 's' : ''}`);
+    if ((sum.modified_bin_files ?? 0) > 0) parts.push(`${sum.modified_bin_files} modified system binary${sum.modified_bin_files !== 1 ? 's' : ''}`);
     if (title)  title.textContent = 'Issues detected: ' + parts.join(' · ');
-    if (sub)    sub.textContent   = 'Review the tables below for details.';
+    if (sub)    sub.textContent   = 'Review the panels below for details.';
   }
 
-  // Mirror the headline onto the Overview "Security Posture" panel
+  // Mirror to Overview Security Posture panel
   const ovBox   = document.getElementById('overview-integrity');
   const ovIcon  = document.getElementById('overview-integrity-icon');
   const ovTitle = document.getElementById('overview-integrity-title');
   const ovSub   = document.getElementById('overview-integrity-sub');
-  if (ovBox) ovBox.className = 'posture-summary ' + (sum.clean ? 'posture-ok' : 'posture-warn');
-  if (ovIcon)  ovIcon.textContent  = icon ? icon.textContent : (sum.clean ? '✓' : '⚠');
-  if (ovTitle) ovTitle.textContent = title ? title.textContent : '';
-  if (ovSub)   ovSub.textContent   = sub ? sub.textContent : '';
+  if (ovBox)   ovBox.className        = 'posture-summary ' + (clean ? 'posture-ok' : 'posture-warn');
+  if (ovIcon)  ovIcon.textContent     = clean ? '✓' : '⚠';
+  if (ovTitle) ovTitle.textContent    = title?.textContent ?? '';
+  if (ovSub)   ovSub.textContent      = sub?.textContent   ?? '';
 
-  // Nav badge (show if any real issue found)
-  const navBadge = document.getElementById('nav-integrity-badge');
-  const issueCount = sum.file_issues + sum.malicious_pkgs;
+  // Nav badge
+  const navBadge   = document.getElementById('nav-integrity-badge');
+  const issueCount = (sum.malicious_pkgs ?? 0);
   if (navBadge) {
-    navBadge.textContent = issueCount || (sum.modified_bin_files > 0 ? '!' : '');
-    navBadge.classList.toggle('hidden', issueCount === 0 && sum.modified_bin_files === 0);
+    navBadge.textContent = issueCount || ((sum.modified_bin_files ?? 0) > 0 ? '!' : '');
+    navBadge.classList.toggle('hidden', issueCount === 0 && (sum.modified_bin_files ?? 0) === 0);
     navBadge.style.background = issueCount > 0 ? 'var(--sev-critical)' : 'var(--sev-medium)';
   }
 
-  // ── File integrity table ─────────────────────────────────────────────────
-  const fileTbody = document.getElementById('integrity-file-tbody');
-  const fileCount = document.getElementById('integrity-file-count');
-  if (fileCount) fileCount.textContent = files.length === 0
-    ? '✓ All files intact' : `${files.length} issue${files.length !== 1 ? 's' : ''} found`;
-
-  if (fileTbody) {
-    if (files.length === 0) {
-      fileTbody.innerHTML = `<tr><td colspan="4">
-        <div class="empty-state">
-          <div class="empty-icon" style="color:var(--sev-low)">✓</div>
-          <div>All installed package files match their checksums.</div>
-        </div></td></tr>`;
-    } else {
-      fileTbody.innerHTML = files.map(f => {
-        const cls = f.issue === 'checksum_mismatch' ? 'cvss-critical'
-                  : f.issue === 'missing_file'      ? 'cvss-high'
-                  : 'cvss-medium';
-        const label = {
-          checksum_mismatch:  '⚠ Checksum',
-          size_mismatch:      '⚠ Size',
-          missing_file:       '✗ Missing',
-          permission_changed: '~ Permissions',
-          mtime_changed:      '~ Modified',
-          altered:            '⚠ Altered',
-        }[f.issue] ?? f.issue;
-        return `<tr>
-          <td class="mono" style="font-size:11px">${escapeHtml(f.package)}</td>
-          <td class="mono" style="font-size:11px">${escapeHtml(f.file)}</td>
-          <td><span class="${cls}" style="font-weight:600">${label}</span></td>
-          <td style="font-size:11px;color:var(--text-secondary)">${escapeHtml(f.detail)}</td>
-        </tr>`;
-      }).join('');
-    }
-  }
-
-  // ── Malicious packages table ─────────────────────────────────────────────
+  // ── Malicious packages ───────────────────────────────────────────────────
   const malTbody = document.getElementById('integrity-mal-tbody');
   const malCount = document.getElementById('integrity-mal-count');
-  if (malCount) malCount.textContent = mal.length === 0
-    ? '✓ No known malicious packages' : `${mal.length} detected`;
-
+  if (malCount) malCount.textContent = mal.length === 0 ? '✓ None detected' : `${mal.length} detected`;
   if (malTbody) {
-    if (mal.length === 0) {
-      malTbody.innerHTML = `<tr><td colspan="5">
-        <div class="empty-state">
-          <div class="empty-icon" style="color:var(--sev-low)">✓</div>
-          <div>No packages matched the OSSF malicious-packages database.</div>
-        </div></td></tr>`;
-    } else {
-      malTbody.innerHTML = mal.map(m => `
+    malTbody.innerHTML = mal.length === 0
+      ? `<tr><td colspan="5"><div class="empty-state">
+           <div class="empty-icon" style="color:var(--sev-low)">✓</div>
+           <div>No packages matched the OSSF malicious-packages database.</div>
+         </div></td></tr>`
+      : mal.map(m => `
         <tr>
           <td><a class="cve-id" href="${escapeHtml(m.url)}" target="_blank" rel="noopener">${escapeHtml(m.id)}</a></td>
           <td class="mono" style="font-size:11px">${escapeHtml(m.package)}</td>
@@ -387,38 +420,57 @@ function populateIntegrity(data) {
           <td style="font-size:11px;color:var(--sev-critical)">${escapeHtml(m.summary)}</td>
           <td><a href="${escapeHtml(m.url)}" target="_blank" rel="noopener" class="btn btn-ghost btn-sm">Details</a></td>
         </tr>`).join('');
-    }
   }
 
-  // ── Modified binaries table ──────────────────────────────────────────────
+  // ── Modified binaries ────────────────────────────────────────────────────
   const binTbody = document.getElementById('integrity-bin-tbody');
   const binCount = document.getElementById('integrity-bin-count');
-  if (binCount) binCount.textContent = bins.length === 0
-    ? '✓ No recent modifications' : `${bins.length} file${bins.length !== 1 ? 's' : ''} modified in last 7 days`;
-
+  if (binCount) binCount.textContent = bins.length === 0 ? '✓ None' : `${bins.length} in last 7 days`;
   if (binTbody) {
-    if (bins.length === 0) {
-      binTbody.innerHTML = `<tr><td colspan="4">
-        <div class="empty-state">
-          <div class="empty-icon" style="color:var(--sev-low)">✓</div>
-          <div>No system binaries were modified in the last 7 days.</div>
-        </div></td></tr>`;
-    } else {
-      binTbody.innerHTML = bins.map(b => {
-        const ageLabel = b.age_hours < 24
-          ? `${b.age_hours}h ago`
-          : `${Math.floor(b.age_hours / 24)}d ago`;
-        const ageCls = b.age_hours < 24 ? 'cvss-critical'
-                     : b.age_hours < 72 ? 'cvss-high'
-                     : 'cvss-medium';
-        return `<tr>
-          <td class="mono" style="font-size:11px">${escapeHtml(b.path)}</td>
-          <td class="mono" style="font-size:11px">${escapeHtml(b.package)}</td>
-          <td style="font-size:11px;color:var(--text-secondary)">${escapeHtml(new Date(b.modified).toLocaleString())}</td>
-          <td class="${ageCls}" style="font-weight:600">${ageLabel}</td>
-        </tr>`;
-      }).join('');
-    }
+    binTbody.innerHTML = bins.length === 0
+      ? `<tr><td colspan="4"><div class="empty-state">
+           <div class="empty-icon" style="color:var(--sev-low)">✓</div>
+           <div>No system binaries modified in the last 7 days.</div>
+         </div></td></tr>`
+      : bins.map(b => {
+          const ageLabel = b.age_hours < 24 ? `${b.age_hours}h ago` : `${Math.floor(b.age_hours / 24)}d ago`;
+          const ageCls   = b.age_hours < 24 ? 'cvss-critical' : b.age_hours < 72 ? 'cvss-high' : 'cvss-medium';
+          return `<tr>
+            <td class="mono" style="font-size:11px">${escapeHtml(b.path)}</td>
+            <td class="mono" style="font-size:11px">${escapeHtml(b.package)}</td>
+            <td style="font-size:11px;color:var(--text-secondary)">${escapeHtml(new Date(b.modified).toLocaleString())}</td>
+            <td class="${ageCls}" style="font-weight:600">${ageLabel}</td>
+          </tr>`;
+        }).join('');
+  }
+
+  // ── SUID files ───────────────────────────────────────────────────────────
+  const suidTbody = document.getElementById('integrity-suid-tbody');
+  const suidCount = document.getElementById('integrity-suid-count');
+  if (suidCount) suidCount.textContent = suid.length === 0 ? '—' : `${suid.length} files`;
+  if (suidTbody) {
+    suidTbody.innerHTML = suid.length === 0
+      ? `<tr><td colspan="2"><div class="empty-state">
+           <div class="empty-icon">—</div>
+           <div>No SUID files found in standard binary paths.</div>
+         </div></td></tr>`
+      : suid.map(path => {
+          const file = path.split('/').pop();
+          return `<tr>
+            <td class="mono" style="font-size:11px;color:var(--text-secondary)">${escapeHtml(path)}</td>
+            <td class="mono" style="font-size:11px">${escapeHtml(file)}</td>
+          </tr>`;
+        }).join('');
+  }
+
+  // ── Running services ─────────────────────────────────────────────────────
+  const svcBody  = document.getElementById('integrity-svc-body');
+  const svcCount = document.getElementById('integrity-svc-count');
+  if (svcCount) svcCount.textContent = svcs.length === 0 ? '—' : `${svcs.length} running`;
+  if (svcBody) {
+    svcBody.innerHTML = svcs.length === 0
+      ? `<div class="empty-state"><div class="empty-icon">—</div><div>No service data available. Run a scan on this device.</div></div>`
+      : `<div class="service-grid">${svcs.map(s => `<span class="service-chip">${escapeHtml(s)}</span>`).join('')}</div>`;
   }
 }
 
@@ -439,13 +491,221 @@ function populateDashboard(r) {
   }
 }
 
+// Cache for search/filter — keyed by hostname
+const _appCache = {};     // hostname → { pkgList, foreignList, totalCount, manager }
+let   _appActiveHost = '';
+
 function _populateApps(pkgList, foreignList, totalCount, manager, suffix) {
-  const grid     = document.getElementById('app-grid');
-  const appCount = document.getElementById('apps-count');
-  if (!grid || !pkgList) return;
+  const hostname = _lastReport?.os?.hostname || window.__savedData?.hostname || '__current__';
+  _appCache[hostname] = { pkgList, foreignList: foreignList ?? [], totalCount, manager };
+  _appActiveHost = hostname;
+
+  _renderAppsToolbar();
+  _renderPackageRisk(hostname);
+}
+
+function _renderAppsToolbar() {
+  const toolbar  = document.getElementById('apps-toolbar');
+  const chipBox  = document.getElementById('apps-dev-chips');
+  const searchEl = document.getElementById('apps-search');
+  if (!toolbar || !chipBox) return;
+
+  // Collect all sources: cache + deviceCache
+  const sources = new Map(); // hostname → label
+  for (const h of Object.keys(_appCache)) sources.set(h, h);
+  if (window.__deviceCache) {
+    for (const [h, d] of Object.entries(window.__deviceCache)) {
+      if (Array.isArray(d.packages) && d.packages.length > 0) sources.set(h, h);
+    }
+  }
+
+  if (sources.size === 0) return;
+  toolbar.classList.remove('hidden');
+
+  chipBox.innerHTML = [...sources.keys()].map(h => {
+    const tag    = window.__deviceTags?.[h];
+    const lbl    = tag ? `${escapeHtml(tag)} <span class="chip-host">${escapeHtml(h)}</span>` : escapeHtml(h);
+    const active = h === _appActiveHost ? ' active' : '';
+    return `<button class="sec-dev-chip${active}" data-host="${escapeHtml(h)}">${lbl}</button>`;
+  }).join('');
+
+  chipBox.querySelectorAll('.sec-dev-chip').forEach(chip => {
+    chip.addEventListener('click', () => {
+      chipBox.querySelectorAll('.sec-dev-chip').forEach(c => c.classList.remove('active'));
+      chip.classList.add('active');
+      _appActiveHost = chip.dataset.host;
+      // Load from deviceCache if not already in _appCache
+      if (!_appCache[_appActiveHost] && window.__deviceCache?.[_appActiveHost]) {
+        const d = window.__deviceCache[_appActiveHost];
+        _appCache[_appActiveHost] = {
+          pkgList:    d.packages    ?? [],
+          foreignList: d.foreign   ?? [],
+          totalCount: d.pkg_count  ?? d.packages?.length ?? 0,
+          manager:    d.pkg_manager ?? '',
+        };
+      }
+      _renderPackageRisk(_appActiveHost);
+    });
+  });
+
+  if (searchEl && !searchEl._wired) {
+    searchEl._wired = true;
+    searchEl.addEventListener('input', () => _renderPackageRisk(_appActiveHost));
+  }
+}
+
+function _renderPackageRisk(hostname) {
+  const entry = _appCache[hostname];
+  if (!entry?.pkgList?.length) {
+    const cached = window.__deviceCache?.[hostname];
+    if (cached?.packages?.length) {
+      _appCache[hostname] = {
+        pkgList:     cached.packages,
+        foreignList: cached.foreign ?? [],
+        totalCount:  cached.pkg_count ?? cached.packages.length,
+        manager:     cached.pkg_manager ?? '',
+      };
+      _renderPackageRisk(hostname); return;
+    }
+    const noData = id => {
+      const el = document.getElementById(id);
+      if (el) el.innerHTML = `<tr><td colspan="4"><div class="empty-state">
+        <div class="empty-icon">⊡</div><div>No package data for this device.</div></div></td></tr>`;
+    };
+    noData('pkg-vuln-tbody'); noData('pkg-foreign-tbody');
+    const grid = document.getElementById('app-grid');
+    if (grid) grid.innerHTML = `<div class="empty-state" style="grid-column:1/-1"><div class="empty-icon">⊡</div><div>No package data.</div></div>`;
+    return;
+  }
+
+  const { pkgList, foreignList, totalCount, manager } = entry;
   const foreign = new Set(foreignList);
-  const shown   = pkgList.slice(0, 80);
-  if (appCount) appCount.textContent = `${totalCount} packages via ${manager}${suffix}`;
+  const search  = (document.getElementById('apps-search')?.value ?? '').trim().toLowerCase();
+  const match   = name => !search || name.toLowerCase().includes(search);
+
+  // Build vuln map from CVE data for this device
+  const vulnMap = _buildVulnPackageMap(hostname);
+
+  // Vulnerable table
+  _renderVulnerableTable(vulnMap, pkgList, match);
+
+  // Foreign table
+  _renderForeignTable(pkgList, foreign, match);
+
+  // All packages grid (inside collapsible)
+  _renderAllPackagesGrid(pkgList, foreign, match, totalCount, manager);
+
+  // Stats bar
+  const riskBar = document.getElementById('pkg-risk-bar');
+  if (riskBar) riskBar.classList.remove('hidden');
+  const vulnStat    = document.getElementById('pkg-stat-vuln');
+  const foreignStat = document.getElementById('pkg-stat-foreign');
+  const totalStat   = document.getElementById('pkg-stat-total');
+  if (vulnStat)    vulnStat.textContent    = `${vulnMap.size} vulnerable`;
+  if (foreignStat) foreignStat.textContent = `${foreignList.length} foreign`;
+  if (totalStat)   totalStat.textContent   = `${totalCount} total`;
+
+  // Wire All Packages collapse toggle once
+  const hdr = document.getElementById('pkg-all-header');
+  if (hdr && !hdr._wired) {
+    hdr._wired = true;
+    hdr.addEventListener('click', () => {
+      const body  = document.getElementById('pkg-all-body');
+      const arrow = document.getElementById('pkg-all-arrow');
+      if (!body) return;
+      body.classList.toggle('hidden');
+      if (arrow) arrow.textContent = body.classList.contains('hidden') ? '▶' : '▼';
+    });
+  }
+}
+
+function _buildVulnPackageMap(hostname) {
+  const currentHost = _lastReport?.os?.hostname || window.__savedData?.hostname;
+  let cves = [];
+  if (!hostname || hostname === '__current__' || hostname === currentHost) {
+    cves = _cveData?.cves ?? window.__savedData?.cves ?? [];
+  } else {
+    cves = window.__deviceCache?.[hostname]?.cves ?? [];
+  }
+  const sevOrder = { critical: 0, high: 1, medium: 2, low: 3, unknown: 4 };
+  const map = new Map();
+  for (const cve of cves) {
+    const pkg = cve.package;
+    if (!pkg) continue;
+    if (!map.has(pkg)) map.set(pkg, { version: cve.installed_version || '', cves: [], worstSev: 'unknown' });
+    const e = map.get(pkg);
+    e.cves.push(cve);
+    if ((sevOrder[cve.severity] ?? 4) < (sevOrder[e.worstSev] ?? 4)) e.worstSev = cve.severity;
+  }
+  return map;
+}
+
+function _renderVulnerableTable(vulnMap, pkgList, match) {
+  const tbody   = document.getElementById('pkg-vuln-tbody');
+  const countEl = document.getElementById('pkg-vuln-count');
+  if (!tbody) return;
+
+  const sevOrder = { critical: 0, high: 1, medium: 2, low: 3, unknown: 4 };
+  const rows = [...vulnMap.entries()]
+    .filter(([name]) => match(name))
+    .sort((a, b) => (sevOrder[a[1].worstSev] ?? 4) - (sevOrder[b[1].worstSev] ?? 4));
+
+  if (countEl) countEl.textContent = rows.length === 0 ? '✓ None' : `${rows.length} packages`;
+
+  if (!rows.length) {
+    const hasSearch = document.getElementById('apps-search')?.value?.trim();
+    tbody.innerHTML = `<tr><td colspan="4"><div class="empty-state">
+      <div class="empty-icon" style="color:var(--sev-low)">✓</div>
+      <div>${hasSearch ? 'No matching vulnerable packages.' : 'No packages with known CVEs — run a CVE analysis.'}</div>
+    </div></td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = rows.map(([name, info]) => {
+    const pkg     = pkgList.find(p => p.name === name);
+    const version = pkg?.version || info.version || '—';
+    return `<tr>
+      <td class="mono">${escapeHtml(name)}</td>
+      <td class="mono" style="font-size:11px;color:var(--text-secondary)">${escapeHtml(version)}</td>
+      <td style="font-size:12px">${info.cves.length}</td>
+      <td><span class="cvss-${info.worstSev}" style="font-weight:600">${info.worstSev}</span></td>
+    </tr>`;
+  }).join('');
+}
+
+function _renderForeignTable(pkgList, foreign, match) {
+  const tbody   = document.getElementById('pkg-foreign-tbody');
+  const countEl = document.getElementById('pkg-foreign-count');
+  if (!tbody) return;
+
+  const rows = pkgList.filter(p => foreign.has(p.name) && match(p.name));
+
+  if (countEl) countEl.textContent = rows.length === 0 ? '✓ None' : `${rows.length} packages`;
+
+  tbody.innerHTML = rows.length === 0
+    ? `<tr><td colspan="2"><div class="empty-state">
+         <div class="empty-icon" style="color:var(--sev-low)">✓</div>
+         <div>No foreign or AUR packages detected.</div>
+       </div></td></tr>`
+    : rows.map(p => `
+      <tr>
+        <td class="mono">${escapeHtml(p.name)}</td>
+        <td class="mono" style="font-size:11px;color:var(--text-secondary)">${escapeHtml(p.version || '—')}</td>
+      </tr>`).join('');
+}
+
+function _renderAllPackagesGrid(pkgList, foreign, match, totalCount, manager) {
+  const grid    = document.getElementById('app-grid');
+  const countEl = document.getElementById('apps-count');
+  if (!grid) return;
+
+  const filtered = pkgList.filter(p => match(p.name));
+  const shown    = filtered.slice(0, 120);
+  const search   = document.getElementById('apps-search')?.value?.trim();
+  const mgr      = manager ? ` via ${manager}` : '';
+  const srch     = search  ? ` · ${filtered.length} matching` : '';
+  if (countEl) countEl.textContent = `${totalCount} packages${mgr}${srch}`;
+
   grid.innerHTML = shown.map(p => `
     <div class="app-card" data-pkg="${escapeHtml(p.name)}">
       <div class="app-icon">📦</div>
@@ -455,9 +715,9 @@ function _populateApps(pkgList, foreignList, totalCount, manager, suffix) {
       </div>
       ${foreign.has(p.name) ? '<div class="app-vuln-flag" title="AUR / foreign"></div>' : ''}
     </div>`).join('');
-  if (pkgList.length > 80) {
-    grid.innerHTML += `<div class="app-card" style="justify-content:center;color:var(--text-muted)">
-      +${pkgList.length - 80} more…</div>`;
+
+  if (filtered.length > 120) {
+    grid.innerHTML += `<div class="app-card app-card-more">+${filtered.length - 120} more — refine search</div>`;
   }
 }
 
@@ -506,116 +766,22 @@ function populateOverviewCVEs(cves, counts) {
 /* --- Populate CVE data once analysis returns --- */
 
 function populateCVEs(cves, counts) {
-  // Stat cards
+  // Update stat cards + nav badge + overview
   setText('stat-critical', counts.critical ?? 0);
   setText('stat-high',     counts.high     ?? 0);
   setText('stat-other',    (counts.medium  ?? 0) + (counts.low ?? 0));
-
-  // Overview: severity breakdown + top vulnerabilities preview
   populateOverviewCVEs(cves, counts);
 
-  // Nav badge (critical + high only)
   const badge = document.getElementById('nav-cve-badge');
   const total = (counts.critical ?? 0) + (counts.high ?? 0);
-  if (badge) {
-    badge.textContent = total;
-    badge.classList.toggle('hidden', total === 0);
-  }
+  if (badge) { badge.textContent = total; badge.classList.toggle('hidden', total === 0); }
 
-  // CVE table
-  const tbody = document.getElementById('cve-table-body');
-  if (tbody) {
-    if (cves.length === 0) {
-      tbody.innerHTML = `<tr><td colspan="7">
-        <div class="empty-state">
-          <div class="empty-icon" style="color:var(--sev-low)">✓</div>
-          <div>No known vulnerabilities found for installed packages.</div>
-        </div></td></tr>`;
-    } else {
-      tbody.innerHTML = cves.map(c => {
-        const sev   = c.severity || 'unknown';
-        const score = c.cvss != null ? Number(c.cvss).toFixed(1) : '—';
-        return `
-          <tr class="cve-row" data-severity="${sev}"
-              data-cve-id="${escapeHtml(c.id)}"
-              data-cve-pkg="${escapeHtml(c.package)}"
-              data-cve-installed="${escapeHtml(c.installed ?? '')}"
-              data-cve-fixed="${escapeHtml(c.fixed ?? '')}"
-              data-cve-summary="${escapeHtml(c.summary ?? '')}"
-              data-cve-url="${escapeHtml(c.url ?? '')}"
-              data-cve-cvss="${escapeHtml(score)}">
-            <td>
-              <span class="cve-id mono">${escapeHtml(c.id)}</span>
-            </td>
-            <td>${escapeHtml(c.package)}</td>
-            <td class="mono" style="font-size:11px">${escapeHtml(c.installed ?? '—')}</td>
-            <td class="mono" style="font-size:11px;color:var(--sev-low)">${escapeHtml(c.fixed ?? '—')}</td>
-            <td class="cvss-score cvss-${sev}">${score}</td>
-            <td><span class="badge badge-${sev}">${sev}</span></td>
-            <td class="cve-actions">
-              <button class="btn btn-ghost btn-sm cve-expand-btn">Details</button>
-            </td>
-          </tr>`;
-      }).join('');
-
-      // Expandable detail rows
-      tbody.querySelectorAll('.cve-expand-btn').forEach(btn => {
-        btn.addEventListener('click', e => {
-          e.stopPropagation();
-          const row  = btn.closest('tr');
-          const next = row.nextElementSibling;
-          if (next?.classList.contains('cve-detail-row')) {
-            next.remove();
-            btn.textContent = 'Details';
-            return;
-          }
-          const d       = row.dataset;
-          const cveId   = d.cveId || '';
-          const summary = d.cveSummary || 'No description available.';
-
-          // Build reliable links — never trust the stored URL alone for Arch CVEs
-          // because the advisory URL format changes; derive fresh links from the ID.
-          const isCVE    = cveId.startsWith('CVE-');
-          const isASA    = cveId.startsWith('ASA-');
-          const nvdUrl   = isCVE ? `https://nvd.nist.gov/vuln/detail/${cveId}` : '';
-          const archUrl  = isCVE ? `https://security.archlinux.org/${cveId}`
-                         : isASA ? `https://security.archlinux.org/advisory/${cveId}`
-                         : (d.cveUrl || '');
-          const osvUrl   = d.cveUrl?.startsWith('https://osv.dev') ? d.cveUrl : '';
-
-          const detail  = document.createElement('tr');
-          detail.className = 'cve-detail-row';
-          detail.innerHTML = `
-            <td colspan="7" class="cve-detail-cell">
-              <div class="cve-detail-body">
-                <p class="cve-detail-summary">${escapeHtml(summary)}</p>
-                <div class="cve-detail-meta">
-                  <span>Package <code>${escapeHtml(d.cvePkg)}</code></span>
-                  <span>Installed <code>${escapeHtml(d.cveInstalled) || '—'}</code></span>
-                  <span>Fixed in <code class="text-ok">${escapeHtml(d.cveFixed) || 'no fix yet'}</code></span>
-                  <span>CVSS <code>${escapeHtml(d.cveCvss)}</code></span>
-                </div>
-                <div class="cve-detail-actions">
-                  ${nvdUrl  ? `<a href="${nvdUrl}"  target="_blank" rel="noopener" class="btn btn-ghost btn-sm">NVD ↗</a>` : ''}
-                  ${archUrl ? `<a href="${archUrl}" target="_blank" rel="noopener" class="btn btn-ghost btn-sm">Arch ↗</a>` : ''}
-                  ${osvUrl  ? `<a href="${osvUrl}"  target="_blank" rel="noopener" class="btn btn-ghost btn-sm">OSV ↗</a>` : ''}
-                  <button class="btn btn-ghost btn-sm"
-                    onclick="navigator.clipboard.writeText('${escapeHtml(cveId)}').then(()=>{this.textContent='Copied!';setTimeout(()=>this.textContent='Copy ID',1500)})">
-                    Copy ID
-                  </button>
-                </div>
-              </div>
-            </td>`;
-          row.insertAdjacentElement('afterend', detail);
-          btn.textContent = 'Close';
-        });
-      });
-    }
-  }
+  // Full multi-device CVE table render
+  renderAllCVEs();
 
   // Flag vulnerable packages in the app grid
   if (cves.length > 0) {
-    const vulnPkgs = new Map();   // pkgName → highest severity
+    const vulnPkgs = new Map();
     for (const c of cves) {
       const cur = vulnPkgs.get(c.package);
       if (!cur || _sevOrder(c.severity) < _sevOrder(cur)) vulnPkgs.set(c.package, c.severity);
@@ -635,6 +801,221 @@ function populateCVEs(cves, counts) {
     });
   }
 }
+
+/* --- Multi-device CVE rendering --- */
+
+function _buildDeviceCVEMap() {
+  const map = new Map(); // hostname → { cves, counts }
+
+  // Current scan (freshest data for this host)
+  const curHost = _lastReport?.os?.hostname || window.__savedData?.hostname;
+  if (curHost && _cveData?.cves?.length > 0) {
+    map.set(curHost, { cves: _cveData.cves, counts: _cveData.counts });
+  } else if (curHost && window.__savedData?.cves?.length > 0) {
+    map.set(curHost, { cves: window.__savedData.cves, counts: window.__savedData.counts });
+  }
+
+  // All devices from Firestore cache
+  if (window.__deviceCache) {
+    for (const [hostname, d] of Object.entries(window.__deviceCache)) {
+      if (map.has(hostname)) continue;
+      if (Array.isArray(d.cves) && d.cves.length > 0) {
+        map.set(hostname, {
+          cves:   d.cves,
+          counts: d.counts ?? { critical: d.critical ?? 0, high: d.high ?? 0, medium: 0, low: 0 },
+        });
+      }
+    }
+  }
+  return map;
+}
+
+function renderAllCVEs() {
+  const deviceMap = _buildDeviceCVEMap();
+  const multiDevice = deviceMap.size > 1;
+
+  // Summary cards row
+  const summaryBox = document.getElementById('cve-device-summary');
+  if (summaryBox) {
+    if (multiDevice) {
+      summaryBox.innerHTML = [...deviceMap.entries()].map(([hostname, { counts }]) => {
+        const c    = counts || {};
+        const crit = c.critical ?? 0;
+        const high = c.high ?? 0;
+        const risk = crit > 0 ? 'critical' : high > 0 ? 'high' : 'clean';
+        const tag  = window.__deviceTags?.[hostname] || '';
+        return `
+          <div class="cve-dev-card cve-dev-card-${risk}" data-device="${escapeHtml(hostname)}"
+               onclick="_setCVEDeviceFilter('${escapeHtml(hostname)}')">
+            <div class="cve-dev-card-name">${escapeHtml(tag || hostname)}</div>
+            ${tag ? `<div class="cve-dev-card-host">${escapeHtml(hostname)}</div>` : ''}
+            <div class="cve-dev-card-counts">
+              ${crit > 0 ? `<span class="cvss-critical">${crit}c</span>` : ''}
+              ${high > 0 ? `<span class="cvss-high">${high}h</span>`     : ''}
+              ${crit + high === 0 ? `<span style="color:var(--sev-low)">✓</span>` : ''}
+            </div>
+          </div>`;
+      }).join('');
+    } else {
+      summaryBox.innerHTML = '';
+    }
+  }
+
+  // Device filter chips
+  const chipBox = document.getElementById('cve-dev-chips');
+  if (chipBox) {
+    const totalCVEs = [...deviceMap.values()].reduce((n, { cves }) => n + (cves?.length || 0), 0);
+    chipBox.innerHTML =
+      `<button class="sec-dev-chip active" data-device="">All (${totalCVEs})</button>` +
+      [...deviceMap.entries()].map(([h, { cves, counts }]) => {
+        const n    = cves?.length || 0;
+        const crit = counts?.critical ?? 0;
+        const tag  = window.__deviceTags?.[h];
+        const lbl  = tag ? `${escapeHtml(tag)} <span class="chip-host">${escapeHtml(h)}</span>` : escapeHtml(h);
+        const suf  = crit > 0 ? ` <span class="cvss-critical" style="font-size:10px">${crit}c</span>` : '';
+        return `<button class="sec-dev-chip" data-device="${escapeHtml(h)}">${lbl} <span class="chip-count">${n}</span>${suf}</button>`;
+      }).join('');
+
+    chipBox.querySelectorAll('.sec-dev-chip').forEach(chip => {
+      chip.addEventListener('click', () => {
+        chipBox.querySelectorAll('.sec-dev-chip').forEach(c => c.classList.remove('active'));
+        chip.classList.add('active');
+        filterCVETable();
+        // sync summary card highlight
+        document.querySelectorAll('.cve-dev-card').forEach(c => {
+          c.classList.toggle('cve-dev-card-selected', c.dataset.device === chip.dataset.device);
+        });
+      });
+    });
+  }
+
+  // Show/hide toolbar and device column
+  document.getElementById('cve-toolbar')?.classList.remove('hidden');
+  document.getElementById('cve-main-table')?.classList.toggle('hide-device-col', !multiDevice);
+
+  // Wire search
+  const searchEl = document.getElementById('cve-search');
+  if (searchEl && !searchEl._wired) {
+    searchEl._wired = true;
+    searchEl.addEventListener('input', filterCVETable);
+  }
+
+  // Flatten + sort all CVEs
+  const sevOrd = { critical: 0, high: 1, medium: 2, low: 3, unknown: 4 };
+  const allRows = [];
+  for (const [hostname, { cves }] of deviceMap) {
+    for (const c of (cves || [])) allRows.push({ ...c, _device: hostname });
+  }
+  allRows.sort((a, b) => {
+    const s = (sevOrd[a.severity] ?? 4) - (sevOrd[b.severity] ?? 4);
+    return s !== 0 ? s : (Number(b.cvss) || 0) - (Number(a.cvss) || 0);
+  });
+
+  const tbody = document.getElementById('cve-table-body');
+  if (!tbody) return;
+
+  if (allRows.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="8"><div class="empty-state">
+      <div class="empty-icon" style="color:var(--sev-low)">✓</div>
+      <div>No known vulnerabilities found for installed packages.</div>
+    </div></td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = allRows.map(c => {
+    const sev   = c.severity || 'unknown';
+    const score = c.cvss != null ? Number(c.cvss).toFixed(1) : '—';
+    const tag   = window.__deviceTags?.[c._device] || c._device;
+    return `
+      <tr class="cve-row" data-severity="${sev}" data-device="${escapeHtml(c._device)}"
+          data-cve-id="${escapeHtml(c.id)}"
+          data-cve-pkg="${escapeHtml(c.package)}"
+          data-cve-installed="${escapeHtml(c.installed ?? '')}"
+          data-cve-fixed="${escapeHtml(c.fixed ?? '')}"
+          data-cve-summary="${escapeHtml(c.summary ?? '')}"
+          data-cve-url="${escapeHtml(c.url ?? '')}"
+          data-cve-cvss="${escapeHtml(score)}">
+        <td class="col-device"><span class="cve-device-chip">${escapeHtml(tag)}</span></td>
+        <td><span class="cve-id mono">${escapeHtml(c.id)}</span></td>
+        <td>${escapeHtml(c.package)}</td>
+        <td class="mono" style="font-size:11px">${escapeHtml(c.installed ?? '—')}</td>
+        <td class="mono" style="font-size:11px;color:var(--sev-low)">${escapeHtml(c.fixed ?? '—')}</td>
+        <td class="cvss-score cvss-${sev}">${score}</td>
+        <td><span class="badge badge-${sev}">${sev}</span></td>
+        <td class="cve-actions"><button class="btn btn-ghost btn-sm cve-expand-btn">Details</button></td>
+      </tr>`;
+  }).join('');
+
+  // Wire expand buttons
+  _wireCVEExpand(tbody);
+}
+
+function _wireCVEExpand(tbody) {
+  tbody.querySelectorAll('.cve-expand-btn').forEach(btn => {
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      const row  = btn.closest('tr');
+      const next = row.nextElementSibling;
+      if (next?.classList.contains('cve-detail-row')) {
+        next.remove(); btn.textContent = 'Details'; return;
+      }
+      const d      = row.dataset;
+      const cveId  = d.cveId || '';
+      const summary = d.cveSummary || 'No description available.';
+      const isCVE  = cveId.startsWith('CVE-');
+      const isASA  = cveId.startsWith('ASA-');
+      const nvdUrl  = isCVE ? `https://nvd.nist.gov/vuln/detail/${cveId}` : '';
+      const archUrl = isCVE ? `https://security.archlinux.org/${cveId}`
+                   : isASA  ? `https://security.archlinux.org/advisory/${cveId}`
+                   : (d.cveUrl || '');
+      const osvUrl  = d.cveUrl?.startsWith('https://osv.dev') ? d.cveUrl : '';
+
+      const detail = document.createElement('tr');
+      detail.className = 'cve-detail-row';
+      detail.innerHTML = `
+        <td colspan="8" class="cve-detail-cell">
+          <div class="cve-detail-body">
+            <p class="cve-detail-summary">${escapeHtml(summary)}</p>
+            <div class="cve-detail-meta">
+              <span>Device <code>${escapeHtml(d.device ?? '')}</code></span>
+              <span>Package <code>${escapeHtml(d.cvePkg)}</code></span>
+              <span>Installed <code>${escapeHtml(d.cveInstalled) || '—'}</code></span>
+              <span>Fixed in <code class="text-ok">${escapeHtml(d.cveFixed) || 'no fix yet'}</code></span>
+              <span>CVSS <code>${escapeHtml(d.cveCvss)}</code></span>
+            </div>
+            <div class="cve-detail-actions">
+              ${nvdUrl  ? `<a href="${nvdUrl}"  target="_blank" rel="noopener" class="btn btn-ghost btn-sm">NVD ↗</a>` : ''}
+              ${archUrl ? `<a href="${archUrl}" target="_blank" rel="noopener" class="btn btn-ghost btn-sm">Arch ↗</a>` : ''}
+              ${osvUrl  ? `<a href="${osvUrl}"  target="_blank" rel="noopener" class="btn btn-ghost btn-sm">OSV ↗</a>` : ''}
+              <button class="btn btn-ghost btn-sm"
+                onclick="navigator.clipboard.writeText('${escapeHtml(cveId)}').then(()=>{this.textContent='Copied!';setTimeout(()=>this.textContent='Copy ID',1500)})">
+                Copy ID
+              </button>
+              <button class="btn btn-primary btn-sm" style="margin-left:auto"
+                onclick="window.askAICVE?.('${escapeHtml(cveId)}','${escapeHtml(d.cvePkg)}','${escapeHtml(d.cveInstalled)}','${escapeHtml(d.cveFixed)}','${escapeHtml(row.dataset.severity)}','${escapeHtml(summary)}')">
+                🤖 Ask AI
+              </button>
+            </div>
+          </div>
+        </td>`;
+      row.insertAdjacentElement('afterend', detail);
+      btn.textContent = 'Close';
+    });
+  });
+}
+
+// Called from CVE device summary card click and from chip click
+window._setCVEDeviceFilter = function(hostname) {
+  const chipBox = document.getElementById('cve-dev-chips');
+  if (!chipBox) return;
+  chipBox.querySelectorAll('.sec-dev-chip').forEach(c => {
+    c.classList.toggle('active', c.dataset.device === hostname);
+  });
+  document.querySelectorAll('.cve-dev-card').forEach(c => {
+    c.classList.toggle('cve-dev-card-selected', c.dataset.device === hostname);
+  });
+  filterCVETable();
+};
 
 /* --- Helpers --- */
 
@@ -657,6 +1038,101 @@ function sevColor(sev) {
   return { critical: 'var(--sev-critical)', high: 'var(--sev-high)',
            medium: 'var(--sev-medium)', low: 'var(--sev-low)' }[sev]
          ?? 'var(--text-muted)';
+}
+
+/* =========================================================
+   NMAP NETWORK SCAN
+   ========================================================= */
+
+window.runNmapScan = async function() {
+  // Infer subnet from the last scan report's IP addresses, or ask user
+  let subnet = '';
+  if (_lastReport?.network?.addresses) {
+    for (const iface of _lastReport.network.addresses) {
+      if (iface.ifname?.startsWith('lo')) continue;
+      for (const addr of (iface.addr_info ?? [])) {
+        if (addr.family === 'inet' && addr.local && addr.prefixlen) {
+          // Build CIDR from IP + prefix
+          const parts = addr.local.split('.').map(Number);
+          const prefix = addr.prefixlen;
+          subnet = `${parts[0]}.${parts[1]}.${parts[2]}.0/${prefix}`;
+          break;
+        }
+      }
+      if (subnet) break;
+    }
+  }
+  if (!subnet) {
+    subnet = prompt('Enter subnet to scan (e.g. 192.168.1.0/24):');
+    if (!subnet) return;
+  }
+
+  const btn = document.getElementById('nmap-scan-btn');
+  if (btn) { btn.disabled = true; btn.textContent = '⬡ Scanning…'; }
+
+  try {
+    const res  = await fetch('/api/nmap_scan', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ subnet }),
+    });
+    const data = await res.json();
+
+    if (!data.ok || !data.available) {
+      alert('Nmap scan failed: ' + (data.error || data.reason || 'unknown error'));
+      return;
+    }
+
+    _mergeNmapResults(data.hosts ?? []);
+  } catch (err) {
+    alert('Nmap scan error: ' + err.message);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '⬡ Nmap Scan'; }
+  }
+};
+
+function _mergeNmapResults(hosts) {
+  const grid  = document.getElementById('devices-grid');
+  const count = document.getElementById('devices-count');
+  if (!grid || hosts.length === 0) return;
+
+  // Remove old nmap placeholder cards
+  grid.querySelectorAll('.nmap-card').forEach(el => el.remove());
+
+  let added = 0;
+  for (const h of hosts) {
+    const label    = h.hostname !== h.ip ? h.hostname : h.ip;
+    const sublabel = h.hostname !== h.ip ? h.ip : '';
+    const vendor   = h.vendor ? ` · ${escapeHtml(h.vendor)}` : '';
+
+    // Skip if already in device cache
+    if (window.__deviceCache?.[h.hostname] || window.__deviceCache?.[h.ip]) continue;
+
+    const card = document.createElement('div');
+    card.className = 'device-card nmap-card';
+    card.innerHTML = `
+      <div class="device-card-header">
+        <div class="device-icon">🔍</div>
+        <div>
+          <div class="device-name">${escapeHtml(label)}</div>
+          <div class="device-os">${escapeHtml(sublabel)}${vendor}</div>
+        </div>
+      </div>
+      <div class="device-footer" style="padding-top:8px">
+        <span class="device-kernel">Discovered via nmap</span>
+        ${h.mac ? `<span class="device-last-scan mono" style="font-size:10px">${escapeHtml(h.mac)}</span>` : ''}
+      </div>`;
+    grid.appendChild(card);
+    added++;
+  }
+
+  if (count) {
+    const existing = parseInt(count.textContent) || 0;
+    const total    = existing + added;
+    count.textContent = `${total} device${total !== 1 ? 's' : ''}`;
+  }
+
+  if (added === 0) alert(`Nmap found ${hosts.length} host${hosts.length !== 1 ? 's' : ''} — all already registered.`);
 }
 
 /* =========================================================
@@ -753,6 +1229,9 @@ window.__openDeviceModal = function(d) {
         </div>
       </div>` : '';
 
+  const currentTag   = typeof window.__getDeviceTag   === 'function' ? window.__getDeviceTag(hostname)   : '';
+  const currentNotes = typeof window.__getDeviceNotes === 'function' ? window.__getDeviceNotes(hostname) : '';
+
   body.innerHTML = `
     <div class="modal-specs-row">
       <div class="modal-spec"><div class="modal-spec-label">Kernel</div><div class="modal-spec-value mono">${escapeHtml(kernel)}</div></div>
@@ -769,7 +1248,105 @@ window.__openDeviceModal = function(d) {
       <div style="margin-left:auto;font-size:11px;color:var(--text-muted)">Last scan<br>${escapeHtml(scanDate)}</div>
     </div>
     ${cveTableHtml}
-    ${netHtml}`;
+    ${netHtml}
+    <div class="modal-section modal-label-section">
+      <div class="modal-section-title">Label &amp; Notes</div>
+      <div class="modal-label-row">
+        <label class="modal-field-label">Short label</label>
+        <div style="display:flex;gap:8px;align-items:center">
+          <input id="modal-tag-input" type="text"
+            placeholder="e.g. web-server-prod, dev-laptop, db-primary"
+            value="${escapeHtml(currentTag)}"
+            class="modal-text-input modal-tag-input" />
+        </div>
+      </div>
+      <div class="modal-label-row">
+        <label class="modal-field-label">Notes</label>
+        <textarea id="modal-notes-input" rows="3"
+          placeholder="Purpose, owner, environment, anything relevant…"
+          class="modal-text-input modal-notes-input">${escapeHtml(currentNotes)}</textarea>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;margin-top:10px">
+        <button class="btn btn-primary btn-sm" id="modal-label-save">Save Label</button>
+        <span id="modal-tag-status" style="font-size:11px;color:var(--text-muted)"></span>
+      </div>
+    </div>`;
+
+  // Wire label save
+  const tagInput    = body.querySelector('#modal-tag-input');
+  const notesInput  = body.querySelector('#modal-notes-input');
+  const tagSave     = body.querySelector('#modal-label-save');
+  const tagStatus   = body.querySelector('#modal-tag-status');
+
+  if (tagSave) {
+    tagSave.addEventListener('click', async () => {
+      const tag   = tagInput?.value.trim()  || '';
+      const notes = notesInput?.value.trim() || '';
+      tagSave.disabled = true;
+      if (typeof window.__saveDeviceLabel === 'function') {
+        await window.__saveDeviceLabel(hostname, tag, notes);
+        if (tagStatus) {
+          tagStatus.textContent = '✓ Saved';
+          setTimeout(() => { tagStatus.textContent = ''; }, 2000);
+        }
+        // Refresh the tag label on the device card
+        document.querySelectorAll('.device-card').forEach(card => {
+          const nameEl = card.querySelector('.device-name');
+          if (nameEl?.textContent !== hostname) return;
+          let labelEl = card.querySelector('.device-tag-label');
+          if (!labelEl && tag) {
+            labelEl = document.createElement('div');
+            labelEl.className = 'device-tag-label';
+            labelEl.style.cssText = 'font-size:10px;color:var(--accent);font-family:var(--font-mono);margin-top:2px';
+            nameEl.after(labelEl);
+          }
+          if (labelEl) labelEl.textContent = tag;
+        });
+      }
+      tagSave.disabled = false;
+    });
+    tagInput?.addEventListener('keydown', e => { if (e.key === 'Enter') tagSave.click(); });
+  }
+
+  // Wire delete button
+  const deleteBtn = document.getElementById('modal-delete-btn');
+  if (deleteBtn) {
+    deleteBtn.onclick = async () => {
+      const confirmed = confirm(
+        `Delete "${hostname}" from Oasis Scan?\n\nThis removes all scan history and labels for this device. It cannot be undone.`
+      );
+      if (!confirmed) return;
+      deleteBtn.disabled = true;
+      deleteBtn.textContent = 'Deleting…';
+      const result = await window.__deleteDevice?.(hostname);
+      if (result?.ok) {
+        modal.style.display = 'none';
+        // Remove the device card from the grid
+        document.querySelectorAll('.device-card').forEach(card => {
+          if (card.querySelector('.device-name')?.textContent === hostname) card.remove();
+        });
+        // Rebuild the device network map
+        if (window.__deviceCache && typeof window.__buildDeviceNetworkMap === 'function') {
+          window.__buildDeviceNetworkMap(Object.values(window.__deviceCache));
+        }
+        // Update device count badge
+        const remaining = document.querySelectorAll('#devices-grid .device-card:not(.nmap-card)').length;
+        const countEl   = document.getElementById('devices-count');
+        const badgeEl   = document.getElementById('nav-device-badge');
+        if (countEl) countEl.textContent = `${remaining} device${remaining !== 1 ? 's' : ''}`;
+        if (badgeEl) {
+          badgeEl.textContent = remaining;
+          badgeEl.classList.toggle('hidden', remaining === 0);
+        }
+        const statEl = document.getElementById('stat-devices');
+        if (statEl) statEl.textContent = remaining;
+      } else {
+        deleteBtn.textContent = '⊗ Delete';
+        deleteBtn.disabled = false;
+        alert('Delete failed: ' + (result?.error || 'unknown error'));
+      }
+    };
+  }
 
   modal.style.display = 'flex';
 };
@@ -904,8 +1481,8 @@ async function runTopologyFromSaved(topo, cveData) {
   if (typeof window.__getFirestoreDevices === 'function') {
     fsDevices = await window.__getFirestoreDevices();
   }
-  renderTopology(topo, cveData, fsDevices);
-  buildAttackNarrative(topo, cveData);
+  renderTopology(topo, cveData, fsDevices, null);
+  buildAIAttackNarrative(topo, cveData);
 }
 
 async function runTopologyBuild() {
@@ -931,8 +1508,8 @@ async function runTopologyBuild() {
       fsDevices = await window.__getFirestoreDevices();
     }
 
-    renderTopology(topo, _cveData, fsDevices);
-    buildAttackNarrative(topo, _cveData);
+    renderTopology(topo, _cveData, fsDevices, null);
+    buildAIAttackNarrative(topo, _cveData);
 
   } catch (err) {
     container.innerHTML = `<div class="empty-state">
@@ -956,7 +1533,7 @@ function _deviceRisk(d) {
   return 'unknown';
 }
 
-function renderTopology(topo, cveData, fsDevices) {
+function renderTopology(topo, cveData, fsDevices, aiPaths) {
   const hostname = topo.hostname || 'This Device';
   const gateway  = topo.gateway;
   const myIps    = topo.my_ips || [];
@@ -1029,8 +1606,31 @@ function renderTopology(topo, cveData, fsDevices) {
     elements.push({ data: { id: 'e-gw-' + fid, source: gateway ? 'router' : 'internet', target: fid, etype: 'lan' } });
   }
 
-  // Attack path edges
-  if (hasNetworkCVEs) {
+  // Attack path edges — AI-specified if available, otherwise fall back to CVE-based heuristic
+  if (aiPaths) {
+    // AI determined entry source (internet or internal)
+    const entrySrc = aiPaths.attack_source === 'internal' ? (gateway ? 'router' : neighborIds[0]) : 'internet';
+    if (entrySrc) {
+      elements.push({
+        data: { id: 'atk-entry', source: entrySrc, target: 'current', etype: 'attack' },
+        classes: 'attack-path',
+      });
+    }
+    // AI-specified pivot targets (IPs matched back to node IDs)
+    for (const ip of (aiPaths.pivot_targets ?? [])) {
+      const nid = neighborIds.find(nid => {
+        const n = neighbors.find(x => x.ip === ip);
+        return n && nid === 'n-' + n.ip.replace(/[:.]/g, '_');
+      });
+      if (nid) {
+        elements.push({
+          data: { id: 'atk-pivot-' + nid, source: 'current', target: nid, etype: 'pivot' },
+          classes: 'attack-pivot',
+        });
+      }
+    }
+  } else if (hasNetworkCVEs) {
+    // Fallback: draw entry from internet + pivot to all visible neighbors
     elements.push({
       data: { id: 'atk-entry', source: 'internet', target: 'current', etype: 'attack' },
       classes: 'attack-path',
@@ -1226,81 +1826,198 @@ function showTopoNodeInfo(d) {
   panel.style.display = 'block';
 }
 
-function buildAttackNarrative(topo, cveData) {
-  const panel = document.getElementById('attack-narrative-panel');
-  const steps = document.getElementById('attack-steps');
+function _renderAttackNarrativeResult(narrative, aiPaths, topo, subline, steps) {
+  // Re-render graph with AI-specified attack paths
+  if (aiPaths && window._topo_cy) {
+    const cy        = window._topo_cy;
+    const neighbors = (topo.neighbors || []).filter(n => n.ip && n.ip !== topo.gateway);
+    cy.elements('.attack-path, .attack-pivot').remove();
+    const src = aiPaths.attack_source === 'internal' ? (topo.gateway ? 'router' : null) : 'internet';
+    if (src && cy.getElementById(src).length && cy.getElementById('current').length) {
+      cy.add({ data: { id: 'atk-entry', source: src, target: 'current', etype: 'attack' }, classes: 'attack-path' });
+    }
+    for (const ip of (aiPaths.pivot_targets ?? [])) {
+      const nid = 'n-' + ip.replace(/[:.]/g, '_');
+      if (cy.getElementById(nid).length) {
+        cy.add({ data: { id: 'atk-pivot-' + nid, source: 'current', target: nid, etype: 'pivot' }, classes: 'attack-pivot' });
+      }
+    }
+    cy.style(_topoStyle());
+  }
+
+  const lines = narrative.split('\n').filter(l => l.trim());
+  steps.innerHTML = lines.length > 0
+    ? lines.map(l => `<p class="attack-step">${escapeHtml(l.trim())}</p>`).join('')
+    : `<p class="attack-step" style="color:var(--text-secondary)">No narrative returned.</p>`;
+
+  if (subline) subline.textContent = 'AI-generated · based on live CVE data + network topology';
+}
+
+async function buildAIAttackNarrative(topo, cveData) {
+  const panel   = document.getElementById('attack-narrative-panel');
+  const steps   = document.getElementById('attack-steps');
+  const subline = document.getElementById('attack-narrative-sub');
   if (!panel || !steps) return;
-
-  const hostname  = topo.hostname || 'this device';
-  const critical  = cveData?.counts?.critical ?? 0;
-  const high      = cveData?.counts?.high ?? 0;
-  const gateway   = topo.gateway;
-  const neighbors = (topo.neighbors || []).filter(n => n.ip && n.ip !== topo.gateway);
-  const topCVEs   = (cveData?.cves ?? [])
-    .filter(c => ['critical', 'high'].includes(c.severity))
-    .slice(0, 3);
-
-  const html = [];
-
-  if (!cveData) {
-    panel.style.display = 'none';
-    return;
-  }
-
-  if (critical + high > 0) {
-    const cveNames = topCVEs.map(c => `<code>${escapeHtml(c.id)}</code>`).join(', ') || 'see CVEs tab';
-    html.push(
-      `<strong>${escapeHtml(hostname)}</strong> has ` +
-      `<strong style="color:${critical > 0 ? 'var(--sev-critical)' : 'var(--sev-high)'}">` +
-      `${critical + high} high/critical CVE${critical + high !== 1 ? 's' : ''}</strong> ` +
-      `(${cveNames}). These vulnerabilities are network-reachable and may not require authentication.`
-    );
-    html.push(
-      `A remote attacker discovers <strong>${escapeHtml(hostname)}</strong> via internet scanning ` +
-      `(Shodan, Censys, Masscan). They craft a payload for one of the identified CVEs and gain ` +
-      `remote code execution — without ever touching the physical machine.`
-    );
-    if (gateway) {
-      html.push(
-        `The attacker is now <em>inside your network</em>. They can directly reach the gateway ` +
-        `router (<strong>${escapeHtml(gateway)}</strong>) and may perform ARP spoofing, ` +
-        `DNS hijacking, or traffic interception for all devices on this subnet.`
-      );
-    }
-    if (neighbors.length > 0) {
-      const ipList = neighbors.slice(0, 5).map(n => `<code>${escapeHtml(n.ip)}</code>`).join(', ');
-      const more   = neighbors.length > 5 ? ` and ${neighbors.length - 5} more` : '';
-      html.push(
-        `Lateral movement: from <strong>${escapeHtml(hostname)}</strong> the attacker probes ` +
-        `${ipList}${more}. Each device on <code>${topo.my_ips?.[0]?.ip ?? '192.168.x.x'}/` +
-        `${topo.my_ips?.[0]?.prefix ?? '24'}</code> is now a target — ` +
-        `NAS drives, cameras, smart TVs, other computers. This is the <strong>kill web</strong>.`
-      );
-      html.push(
-        `If any neighbor device has its own unpatched CVEs, the attacker can pivot to it ` +
-        `without ever touching the internet again — staying invisible to perimeter defenses.`
-      );
-    }
-    const sev = critical > 0 ? 'critical' : 'high';
-    html.push(
-      `<strong style="color:var(--sev-${sev})">Action required:</strong> ` +
-      `Patch or mitigate ${sev}-severity CVEs on <strong>${escapeHtml(hostname)}</strong> ` +
-      `to break the initial attack chain before an attacker gains a foothold.`
-    );
-  } else {
-    html.push(
-      `<strong style="color:var(--sev-low)">✓ No high or critical CVEs found on ${escapeHtml(hostname)}.</strong> ` +
-      `This device is not a known high-risk remote entry point at this time.`
-    );
-    if (neighbors.length > 0) {
-      html.push(
-        `${neighbors.length} neighbor device${neighbors.length !== 1 ? 's are' : ' is'} visible on the network. ` +
-        `Run Oasis Scan on those machines to check their CVE posture — ` +
-        `a vulnerable neighbor could pivot <em>into</em> this device laterally.`
-      );
-    }
-  }
+  if (!cveData) { panel.style.display = 'none'; return; }
 
   panel.style.display = '';
-  steps.innerHTML = html.map(s => `<li class="attack-step">${s}</li>`).join('');
+
+  const hostname  = topo.hostname || 'this device';
+  const gateway   = topo.gateway;
+  const myIp      = topo.my_ips?.[0]?.ip ?? 'unknown';
+  const prefix    = topo.my_ips?.[0]?.prefix ?? '24';
+  const neighbors = (topo.neighbors || []).filter(n => n.ip && n.ip !== gateway);
+
+  const critCount     = cveData?.counts?.critical ?? 0;
+  const highCount     = cveData?.counts?.high     ?? 0;
+  const neighborCount = neighbors.length;
+  const cacheKey      = `atk_${hostname}_${critCount}c_${highCount}h_${neighborCount}n`
+    .replace(/[^a-zA-Z0-9_-]/g, '_');
+
+  // 1. Check localStorage first (instant, no Firestore rules needed)
+  try {
+    const raw = localStorage.getItem('ai_narrative_' + cacheKey);
+    if (raw) {
+      const cached = JSON.parse(raw);
+      // Expire after 24 hours
+      if (cached?.narrative && Date.now() - (cached.savedAt || 0) < 86400000) {
+        if (subline) subline.textContent = 'AI-generated · cached';
+        steps.innerHTML = '';
+        _renderAttackNarrativeResult(cached.narrative, cached.aiPaths, topo, subline, steps);
+        return;
+      }
+    }
+  } catch (_) {}
+
+  // 2. Check Firebase cache (cross-device)
+  if (typeof window.__loadAINarrative === 'function') {
+    const cached = await window.__loadAINarrative(cacheKey);
+    if (cached?.narrative) {
+      try { localStorage.setItem('ai_narrative_' + cacheKey, JSON.stringify({ narrative: cached.narrative, aiPaths: cached.aiPaths, savedAt: Date.now() })); } catch (_) {}
+      if (subline) subline.textContent = 'AI-generated · cached';
+      steps.innerHTML = '';
+      _renderAttackNarrativeResult(cached.narrative, cached.aiPaths, topo, subline, steps);
+      return;
+    }
+  }
+
+  if (subline) subline.textContent = 'Generating AI analysis…';
+  steps.innerHTML = `<div class="attack-stream-loading">
+    <span class="scan-spinner" style="display:inline-block;width:14px;height:14px;vertical-align:middle;margin-right:8px"></span>
+    Analysing CVE data and network topology…
+  </div>`;
+
+  const topCVEs = (cveData?.cves ?? [])
+    .filter(c => ['critical', 'high'].includes(c.severity))
+    .sort((a, b) => (Number(b.cvss) || 0) - (Number(a.cvss) || 0))
+    .slice(0, 6);
+
+  const suid     = _lastReport?.suid_files        ?? [];
+  const services = _lastReport?.services?.running ?? [];
+
+  const cveBlock = topCVEs.length > 0
+    ? topCVEs.map(c => `- ${c.id} [${c.severity.toUpperCase()} CVSS:${Number(c.cvss || 0).toFixed(1)}] package:${c.package}${c.description ? ' — ' + c.description.slice(0, 120) : ''}`).join('\n')
+    : 'No high/critical CVEs found.';
+
+  const neighborBlock = neighbors.slice(0, 6).map(n => {
+    const known = window.__deviceCache?.[n.ip];
+    const risk  = known ? `(${known.critical ?? 0} critical, ${known.high ?? 0} high CVEs)` : '(CVE posture unknown)';
+    return `- ${n.ip} ${risk}`;
+  }).join('\n') || '- None visible';
+
+  const prompt =
+`You are a penetration tester writing an attack path report. Given the scan data below, output EXACTLY two sections:
+
+SECTION 1 — one line of JSON (no markdown, no explanation):
+{"attack_source":"internet","entry_cves":["CVE-ID-1"],"pivot_targets":["ip1","ip2"]}
+Use "internet" or "internal" for attack_source. List only CVE IDs actually present in the data for entry_cves. List only IPs from NEIGHBORS for pivot_targets (max 3 most vulnerable).
+
+SECTION 2 — after the exact separator line "---NARRATIVE---":
+Write 4-6 numbered steps describing the realistic attack chain for this specific host. Reference actual CVE IDs, package names, service names, and neighbor IPs from the data. Be specific and technical. End with one concrete remediation step.
+
+=== SCAN DATA ===
+HOST: ${hostname}
+IP: ${myIp}/${prefix}
+GATEWAY: ${gateway ?? 'unknown'}
+
+HIGH/CRITICAL CVEs ON THIS HOST:
+${cveBlock}
+
+NETWORK NEIGHBORS:
+${neighborBlock}
+
+RUNNING SERVICES: ${services.slice(0, 12).join(', ') || 'none recorded'}
+SUID FILES: ${suid.length} found`;
+
+  try {
+    const resp = await fetch('/api/ai/chat', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({
+        messages:    [{ role: 'user', content: prompt }],
+        temperature: 0.55,
+        max_tokens:  1200,
+      }),
+    });
+
+    const reader  = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buf       = '';
+    let fullText  = '';
+    let streamEl  = null;
+
+    steps.innerHTML = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let nl;
+      while ((nl = buf.indexOf('\n')) !== -1) {
+        const line = buf.slice(0, nl).trim();
+        buf = buf.slice(nl + 1);
+        if (!line.startsWith('data: ')) continue;
+        const payload = line.slice(6);
+        if (payload === '[DONE]') break;
+        try {
+          const delta = JSON.parse(payload)?.choices?.[0]?.delta?.content;
+          if (delta) {
+            fullText += delta;
+            if (!streamEl) {
+              streamEl = document.createElement('pre');
+              streamEl.className = 'attack-stream-text';
+              steps.appendChild(streamEl);
+            }
+            streamEl.textContent = fullText;
+          }
+        } catch {}
+      }
+    }
+
+    // Parse the two sections
+    const sepIdx = fullText.indexOf('---NARRATIVE---');
+    let narrative = fullText;
+    let aiPaths   = null;
+
+    if (sepIdx !== -1) {
+      const jsonPart = fullText.slice(0, sepIdx).trim();
+      narrative      = fullText.slice(sepIdx + 15).trim();
+      try {
+        // Find first { … } in the json part
+        const m = jsonPart.match(/\{[\s\S]*?\}/);
+        if (m) aiPaths = JSON.parse(m[0]);
+      } catch {}
+    }
+
+    // Save to localStorage (immediate) and Firebase (cross-device)
+    try { localStorage.setItem('ai_narrative_' + cacheKey, JSON.stringify({ narrative, aiPaths, savedAt: Date.now() })); } catch (_) {}
+    if (typeof window.__saveAINarrative === 'function') window.__saveAINarrative(cacheKey, narrative, aiPaths);
+
+    steps.innerHTML = '';
+    _renderAttackNarrativeResult(narrative, aiPaths, topo, subline, steps);
+
+  } catch (err) {
+    steps.innerHTML = `<p class="attack-step" style="color:var(--sev-critical)">AI analysis failed: ${escapeHtml(err.message)}</p>`;
+    if (subline) subline.textContent = 'Error';
+  }
 }

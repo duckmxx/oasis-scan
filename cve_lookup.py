@@ -14,6 +14,40 @@ import urllib.error
 _SEV_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "unknown": 4}
 _OSV_BATCH = 500   # max queries per OSV request
 
+_VULN_TYPES = [
+    ("RCE",      ["arbitrary code execution", "remote code execution", "code execution", "execute arbitrary"]),
+    ("DoS",      ["denial of service", "memory exhaustion", "null pointer", "infinite loop", "crash", "out of memory", "resource exhaustion"]),
+    ("EscPriv",  ["privilege escalation", "gain root", "local privilege", "escalation of privilege", "gain elevated"]),
+    ("InfoDisc", ["information disclosure", "sensitive information", "memory leak", "data leak", "information leak", "uninitialized memory"]),
+    ("XSS",      ["cross-site scripting", " xss", "html injection", "script injection"]),
+    ("SQLi",     ["sql injection"]),
+    ("Overflow", ["buffer overflow", "stack overflow", "heap overflow", "integer overflow", "out-of-bounds write", "stack-based buffer", "heap-based buffer"]),
+    ("Bypass",   ["bypass", "restriction bypass", "authentication bypass", "access control bypass", "improper authentication"]),
+    ("Traversal",["directory traversal", "path traversal"]),
+    ("UAF",      ["use after free", "use-after-free"]),
+    ("Corrupt",  ["memory corruption", "heap corruption", "type confusion"]),
+]
+
+_REMOTE_KW = ["remote", "network", "unauthenticated", "internet", "http", "web server", "listening", "socket", "tcp", "udp", "attacker-controlled"]
+_LOCAL_KW  = ["local user", "local attacker", "local access", "physical access", "console access", "authenticated local"]
+
+
+def _classify_type(text: str) -> str:
+    t = text.lower()
+    for label, kws in _VULN_TYPES:
+        if any(k in t for k in kws):
+            return label
+    return ""
+
+
+def _classify_vector(text: str) -> str:
+    t = text.lower()
+    if any(k in t for k in _REMOTE_KW):
+        return "REMOTE"
+    if any(k in t for k in _LOCAL_KW):
+        return "LOCAL"
+    return ""
+
 
 # ── Public entry point ────────────────────────────────────────────────────────
 
@@ -105,6 +139,8 @@ def _arch_cves(packages: list[dict]) -> list[dict]:
                     "cvss":      None,
                     "summary":   summary,
                     "url":       cve_url,
+                    "type":      _classify_type(summary),
+                    "vector":    _classify_vector(summary),
                 })
 
     result.sort(key=lambda x: _SEV_ORDER.get(x["severity"], 4))
@@ -173,6 +209,7 @@ def _osv_cves(packages: list[dict], ecosystem: str) -> list[dict]:
                 cvss  = _extract_cvss(vuln)
                 fixed = _extract_fixed(vuln)
 
+                summary = vuln.get("summary", "")
                 result.append({
                     "id":        vid,
                     "package":   pkg["name"],
@@ -180,8 +217,10 @@ def _osv_cves(packages: list[dict], ecosystem: str) -> list[dict]:
                     "fixed":     fixed or "?",
                     "severity":  sev,
                     "cvss":      cvss,
-                    "summary":   vuln.get("summary", ""),
+                    "summary":   summary,
                     "url":       f"https://osv.dev/vulnerability/{vid}",
+                    "type":      _classify_type(summary),
+                    "vector":    _classify_vector(summary),
                 })
 
     result.sort(key=lambda x: _SEV_ORDER.get(x["severity"], 4))

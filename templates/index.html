@@ -11,6 +11,12 @@
 </head>
 <body>
 
+  <!-- Auth gate: covers UI until Firebase resolves, prevents login flash -->
+  <div id="auth-gate">
+    <div class="auth-gate-spinner"></div>
+    <div style="font-size:13px;color:var(--text-muted)">Verifying session…</div>
+  </div>
+
   <!-- =====================================================
        SIDEBAR
        ===================================================== -->
@@ -30,14 +36,18 @@
         <span class="nav-badge hidden" id="nav-cve-badge">0</span>
       </li>
       <li class="nav-item" data-section="section-integrity">
-        <span class="nav-icon">🔒</span> Integrity
+        <span class="nav-icon">🔒</span> System Audit
         <span class="nav-badge hidden" id="nav-integrity-badge">!</span>
       </li>
       <li class="nav-item" data-section="section-apps">
-        <span class="nav-icon">⊡</span> Applications
+        <span class="nav-icon">⊡</span> Packages
       </li>
       <li class="nav-item" data-section="section-topology">
         <span class="nav-icon">⬡</span> Attack Map
+      </li>
+      <li class="nav-item" data-section="section-patches">
+        <span class="nav-icon">⚕</span> Patches
+        <span class="nav-badge hidden" id="nav-patch-badge">0</span>
       </li>
     </ul>
 
@@ -46,6 +56,16 @@
       <li class="nav-item" data-section="section-devices">
         <span class="nav-icon">⊟</span> Devices
         <span class="nav-badge hidden" id="nav-device-badge">0</span>
+      </li>
+    </ul>
+
+    <p class="sidebar-section-label">Tools</p>
+    <ul class="sidebar-nav">
+      <li class="nav-item" data-section="section-run">
+        <span class="nav-icon">⬇</span> Run
+      </li>
+      <li class="nav-item" data-section="section-settings">
+        <span class="nav-icon">⚙</span> Settings
       </li>
     </ul>
 
@@ -122,7 +142,7 @@
         <div class="panel">
           <div class="panel-header">
             <div class="panel-title"><span class="icon">🔒</span> Security Posture</div>
-            <button class="btn btn-ghost btn-sm" data-jump="section-integrity">Integrity →</button>
+            <button class="btn btn-ghost btn-sm" data-jump="section-integrity">System Audit →</button>
           </div>
           <div class="panel-body">
             <div class="posture-summary" id="overview-integrity">
@@ -175,48 +195,25 @@
     </section>
 
     <!-- ===================================================
-         SECTION: INTEGRITY
+         SECTION: SYSTEM AUDIT
          =================================================== -->
     <section class="page-section hidden" id="section-integrity">
+
+      <!-- Device selector (shown when multiple devices have audit data) -->
+      <div class="sec-toolbar hidden" id="integrity-toolbar">
+        <div class="sec-dev-chips" id="integrity-dev-chips"></div>
+      </div>
 
       <!-- Summary banner -->
       <div class="integrity-banner" id="integrity-banner">
         <div class="integrity-banner-icon" id="integrity-banner-icon">⬡</div>
         <div>
-          <div class="integrity-banner-title" id="integrity-banner-title">Run a scan to check package integrity</div>
-          <div class="integrity-banner-sub"   id="integrity-banner-sub">Verifies installed package files, detects tampered binaries, and checks for known malicious packages.</div>
+          <div class="integrity-banner-title" id="integrity-banner-title">Run a scan to audit system security</div>
+          <div class="integrity-banner-sub"   id="integrity-banner-sub">Checks for malicious packages, recently modified system binaries, SUID files, and running services.</div>
         </div>
       </div>
 
-      <!-- File integrity -->
-      <div class="panel">
-        <div class="panel-header">
-          <div class="panel-title"><span class="icon">🔒</span> File Integrity</div>
-          <span class="text-muted" style="font-size:12px" id="integrity-file-count">—</span>
-        </div>
-        <div class="panel-body no-pad">
-          <table class="cve-table">
-            <thead>
-              <tr>
-                <th>Package</th>
-                <th>File</th>
-                <th>Issue</th>
-                <th>Detail</th>
-              </tr>
-            </thead>
-            <tbody id="integrity-file-tbody">
-              <tr><td colspan="4">
-                <div class="empty-state">
-                  <div class="empty-icon">🔒</div>
-                  <div>Run a scan to verify package file integrity.</div>
-                </div>
-              </td></tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      <!-- Malicious packages -->
+      <!-- Known Malicious Packages -->
       <div class="panel">
         <div class="panel-header">
           <div class="panel-title"><span class="icon">☠</span> Known Malicious Packages</div>
@@ -273,12 +270,56 @@
         </div>
       </div>
 
+      <!-- SUID Files -->
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title"><span class="icon">⚑</span> SUID Files</div>
+          <span class="text-muted" style="font-size:12px" id="integrity-suid-count">—</span>
+        </div>
+        <div class="panel-body no-pad">
+          <table class="cve-table">
+            <thead>
+              <tr>
+                <th>Path</th>
+                <th>File</th>
+              </tr>
+            </thead>
+            <tbody id="integrity-suid-tbody">
+              <tr><td colspan="2">
+                <div class="empty-state">
+                  <div class="empty-icon">⚑</div>
+                  <div>Run a scan to enumerate SUID files.</div>
+                </div>
+              </td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Running Services -->
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title"><span class="icon">⚙</span> Running Services</div>
+          <span class="text-muted" style="font-size:12px" id="integrity-svc-count">—</span>
+        </div>
+        <div class="panel-body" id="integrity-svc-body">
+          <div class="empty-state">
+            <div class="empty-icon">⚙</div>
+            <div>Run a scan to list running services.</div>
+          </div>
+        </div>
+      </div>
+
     </section>
 
     <!-- ===================================================
          SECTION: CVEs
          =================================================== -->
     <section class="page-section hidden" id="section-cves">
+
+      <!-- Per-device risk summary (shown when 2+ devices) -->
+      <div class="cve-device-summary" id="cve-device-summary"></div>
+
       <div class="panel">
         <div class="panel-header">
           <div class="panel-title"><span class="icon">⚠</span> CVE Results</div>
@@ -289,29 +330,37 @@
             <button class="filter-chip low"      data-sev="low">Low</button>
           </div>
         </div>
+
+        <!-- Device filter chips + search (revealed when data is ready) -->
+        <div class="sec-toolbar hidden" id="cve-toolbar">
+          <div class="sec-dev-chips" id="cve-dev-chips"></div>
+          <div class="sec-search-wrap">
+            <input type="text" id="cve-search" class="sec-search-input"
+                   placeholder="Search CVE ID or package…">
+          </div>
+        </div>
+
         <div class="panel-body no-pad">
-          <table class="cve-table">
+          <table class="cve-table" id="cve-main-table">
             <thead>
               <tr>
+                <th class="col-device">Device</th>
                 <th>CVE ID</th>
-                <th>Package / Component</th>
-                <th>Installed Ver.</th>
-                <th>Fixed Ver.</th>
+                <th>Package</th>
+                <th>Installed</th>
+                <th>Fixed In</th>
                 <th>CVSS</th>
                 <th>Severity</th>
                 <th>Actions</th>
               </tr>
             </thead>
             <tbody id="cve-table-body">
-              <!-- Placeholder rows — replaced by JS after scan -->
-              <tr>
-                <td colspan="7">
-                  <div class="empty-state">
-                    <div class="empty-icon">⬡</div>
-                    <div>No scan results yet. Run a scan to detect CVEs.</div>
-                  </div>
-                </td>
-              </tr>
+              <tr><td colspan="8">
+                <div class="empty-state">
+                  <div class="empty-icon">⬡</div>
+                  <div>No scan results yet. Run a scan to detect CVEs.</div>
+                </div>
+              </td></tr>
             </tbody>
           </table>
         </div>
@@ -319,24 +368,98 @@
     </section>
 
     <!-- ===================================================
-         SECTION: APPLICATIONS
+         SECTION: PACKAGE RISK
          =================================================== -->
     <section class="page-section hidden" id="section-apps">
+
+      <!-- Device chips + search (shared across all sub-panels) -->
+      <div class="sec-toolbar hidden" id="apps-toolbar">
+        <div class="sec-dev-chips" id="apps-dev-chips"></div>
+        <div class="sec-search-wrap">
+          <input type="text" id="apps-search" class="sec-search-input" placeholder="Search packages…">
+        </div>
+      </div>
+
+      <!-- Stats summary bar -->
+      <div class="pkg-risk-bar hidden" id="pkg-risk-bar">
+        <span class="pkg-risk-stat pkg-risk-vuln" id="pkg-stat-vuln">—</span>
+        <span class="pkg-risk-sep">·</span>
+        <span class="pkg-risk-stat pkg-risk-foreign" id="pkg-stat-foreign">—</span>
+        <span class="pkg-risk-sep">·</span>
+        <span class="pkg-risk-stat" id="pkg-stat-total">—</span>
+      </div>
+
+      <!-- Vulnerable packages -->
       <div class="panel">
         <div class="panel-header">
-          <div class="panel-title"><span class="icon">⊡</span> Installed Applications</div>
-          <span class="text-muted" style="font-size:12px" id="apps-count">—</span>
+          <div class="panel-title"><span class="icon">⚠</span> Vulnerable Packages</div>
+          <span class="text-muted" style="font-size:12px" id="pkg-vuln-count">—</span>
         </div>
-        <div class="panel-body">
+        <div class="panel-body no-pad">
+          <table class="cve-table">
+            <thead>
+              <tr>
+                <th>Package</th>
+                <th>Installed Version</th>
+                <th>CVEs</th>
+                <th>Worst Severity</th>
+              </tr>
+            </thead>
+            <tbody id="pkg-vuln-tbody">
+              <tr><td colspan="4">
+                <div class="empty-state">
+                  <div class="empty-icon">⚠</div>
+                  <div>Run a scan and CVE analysis to see vulnerable packages.</div>
+                </div>
+              </td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Foreign / AUR packages -->
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title"><span class="icon">⬡</span> Foreign / AUR Packages</div>
+          <span class="text-muted" style="font-size:12px" id="pkg-foreign-count">—</span>
+        </div>
+        <div class="panel-body no-pad">
+          <table class="cve-table">
+            <thead>
+              <tr>
+                <th>Package</th>
+                <th>Version</th>
+              </tr>
+            </thead>
+            <tbody id="pkg-foreign-tbody">
+              <tr><td colspan="2">
+                <div class="empty-state">
+                  <div class="empty-icon">⬡</div>
+                  <div>Run a scan to detect foreign / AUR packages.</div>
+                </div>
+              </td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- All packages (collapsible) -->
+      <div class="panel">
+        <div class="panel-header pkg-all-header" id="pkg-all-header" style="cursor:pointer;user-select:none">
+          <div class="panel-title"><span class="icon">⊡</span> All Packages</div>
+          <span class="text-muted" style="font-size:12px" id="apps-count">—</span>
+          <span class="pkg-all-arrow" id="pkg-all-arrow">▶</span>
+        </div>
+        <div class="panel-body hidden" id="pkg-all-body">
           <div class="app-grid" id="app-grid">
-            <!-- Populated by JS after scan -->
             <div class="empty-state" style="grid-column:1/-1">
               <div class="empty-icon">⊡</div>
-              <div>No applications scanned yet.</div>
+              <div>No packages scanned yet.</div>
             </div>
           </div>
         </div>
       </div>
+
     </section>
 
     <!-- ===================================================
@@ -355,6 +478,7 @@
               <span><span class="topo-line-sample attack"></span>Attack path</span>
               <span><span class="topo-line-sample pivot"></span>Lateral move</span>
             </div>
+            <button class="btn btn-ghost btn-sm" id="topo-ai-btn">🤖 AI Analysis</button>
             <button class="btn btn-ghost btn-sm" id="topo-rebuild-btn">↺ Rebuild</button>
           </div>
         </div>
@@ -369,11 +493,11 @@
 
       <div class="panel" id="attack-narrative-panel" style="display:none">
         <div class="panel-header">
-          <div class="panel-title"><span class="icon">⚠</span> Hypothetical Attack Path</div>
-          <span class="text-muted" style="font-size:12px">Based on CVE data + live network topology — no AI</span>
+          <div class="panel-title"><span class="icon">⚠</span> AI Attack Path Analysis</div>
+          <span class="text-muted" style="font-size:12px" id="attack-narrative-sub">Generating…</span>
         </div>
         <div class="panel-body" style="padding:20px 24px">
-          <ol class="attack-steps" id="attack-steps"></ol>
+          <div class="attack-stream-wrap" id="attack-steps"></div>
         </div>
       </div>
     </section>
@@ -410,7 +534,10 @@
       <div class="panel">
         <div class="panel-header">
           <div class="panel-title"><span class="icon">⊟</span> Devices</div>
-          <span class="text-muted" style="font-size:12px" id="devices-count">—</span>
+          <div style="display:flex;align-items:center;gap:10px">
+            <button class="btn btn-ghost btn-sm" id="nmap-scan-btn" onclick="window.runNmapScan?.()">⬡ Nmap Scan</button>
+            <span class="text-muted" style="font-size:12px" id="devices-count">—</span>
+          </div>
         </div>
         <div class="panel-body">
           <div class="devices-grid" id="devices-grid">
@@ -421,6 +548,306 @@
           </div>
         </div>
       </div>
+    </section>
+
+    <!-- ===================================================
+         SECTION: RUN / DOWNLOADS
+         =================================================== -->
+    <section class="page-section hidden" id="section-run">
+
+      <!-- Hero -->
+      <div class="panel">
+        <div class="panel-body" style="padding:28px 28px 24px">
+          <div style="display:flex;align-items:flex-start;gap:20px">
+            <div style="width:48px;height:48px;background:var(--accent-glow);border:1px solid var(--accent-dim);
+                        border-radius:var(--radius-md);display:flex;align-items:center;justify-content:center;
+                        font-size:22px;flex-shrink:0">⬡</div>
+            <div>
+              <div style="font-size:18px;font-weight:700;margin-bottom:6px">Run Oasis Scan on a device</div>
+              <div style="color:var(--text-secondary);font-size:13px;line-height:1.6">
+                Install the scanner on any machine to collect a full security profile — OS info, packages, CVEs,
+                SUID files, network topology — and sync it automatically to this dashboard under your account.
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Download cards -->
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title"><span class="icon">⬇</span> Downloads</div>
+        </div>
+        <div class="panel-body">
+          <div class="run-dl-grid">
+
+            <!-- GUI -->
+            <div class="run-dl-card">
+              <div class="run-dl-icon">🖥</div>
+              <div class="run-dl-name">Desktop GUI</div>
+              <div class="run-dl-desc">Full graphical scanner with login, animated scan progress, and results view. Requires Python 3.10+ and Tkinter.</div>
+              <div class="run-dl-badges">
+                <span class="run-badge run-badge-linux">Linux</span>
+              </div>
+              <a href="/download/gui.py" class="btn btn-primary btn-sm run-dl-btn">⬇ Download gui.py</a>
+            </div>
+
+            <!-- CLI -->
+            <div class="run-dl-card">
+              <div class="run-dl-icon">⌨</div>
+              <div class="run-dl-name">CLI Scanner</div>
+              <div class="run-dl-desc">Headless terminal scanner — runs from cron or SSH. Prompts for login and writes a JSON report + syncs to Firestore.</div>
+              <div class="run-dl-badges">
+                <span class="run-badge run-badge-linux">Linux</span>
+              </div>
+              <a href="/download/scanner.py" class="btn btn-ghost btn-sm run-dl-btn">⬇ Download scanner.py</a>
+            </div>
+
+            <!-- Windows placeholder -->
+            <div class="run-dl-card run-dl-card-soon">
+              <div class="run-dl-icon">🪟</div>
+              <div class="run-dl-name">Windows Binary</div>
+              <div class="run-dl-desc">Native .exe — no Python required. Planned for next release.</div>
+              <div class="run-dl-badges">
+                <span class="run-badge run-badge-soon">Coming Soon</span>
+              </div>
+              <button class="btn btn-ghost btn-sm run-dl-btn" disabled>⬇ Not yet available</button>
+            </div>
+
+            <!-- macOS placeholder -->
+            <div class="run-dl-card run-dl-card-soon">
+              <div class="run-dl-icon"></div>
+              <div class="run-dl-name">macOS Binary</div>
+              <div class="run-dl-desc">Native .app bundle. Planned for next release alongside Windows.</div>
+              <div class="run-dl-badges">
+                <span class="run-badge run-badge-soon">Coming Soon</span>
+              </div>
+              <button class="btn btn-ghost btn-sm run-dl-btn" disabled>⬇ Not yet available</button>
+            </div>
+
+          </div>
+        </div>
+      </div>
+
+      <!-- Quick start: GUI -->
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title"><span class="icon">⚡</span> Quick Start — Desktop GUI</div>
+        </div>
+        <div class="panel-body">
+          <div class="run-steps">
+            <div class="run-step">
+              <div class="run-step-num">1</div>
+              <div>
+                <div class="run-step-title">Install dependencies</div>
+                <pre class="run-code"><code># Arch Linux
+sudo pacman -S python tk
+
+# Debian / Ubuntu
+sudo apt install python3 python3-tk</code></pre>
+              </div>
+            </div>
+            <div class="run-step">
+              <div class="run-step-num">2</div>
+              <div>
+                <div class="run-step-title">Run the GUI</div>
+                <pre class="run-code"><code>python3 gui.py</code></pre>
+              </div>
+            </div>
+            <div class="run-step">
+              <div class="run-step-num">3</div>
+              <div>
+                <div class="run-step-title">Sign in with your Oasis account</div>
+                <div style="color:var(--text-secondary);font-size:12px;margin-top:4px">
+                  Use the same email and password as this dashboard. The scan results will appear in Devices automatically.
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Quick start: CLI -->
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title"><span class="icon">⌨</span> Quick Start — CLI (headless / SSH)</div>
+        </div>
+        <div class="panel-body">
+          <div class="run-steps">
+            <div class="run-step">
+              <div class="run-step-num">1</div>
+              <div>
+                <div class="run-step-title">Download both files to the same directory</div>
+                <pre class="run-code"><code>curl -O https://scanoasis.tech/download/scanner.py
+curl -O https://scanoasis.tech/download/gui.py</code></pre>
+              </div>
+            </div>
+            <div class="run-step">
+              <div class="run-step-num">2</div>
+              <div>
+                <div class="run-step-title">Run the CLI scanner directly</div>
+                <pre class="run-code"><code>python3 scanner.py</code></pre>
+              </div>
+            </div>
+            <div class="run-step">
+              <div class="run-step-num">3</div>
+              <div>
+                <div class="run-step-title">Optional: schedule with cron</div>
+                <pre class="run-code"><code># Run every day at 3 AM
+0 3 * * * python3 /opt/oasis/scanner.py</code></pre>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </section>
+
+    <!-- ===================================================
+         SECTION: SETTINGS
+         =================================================== -->
+    <section class="page-section hidden" id="section-settings">
+
+      <!-- Voice Output -->
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title"><span class="icon">🔊</span> Voice Output</div>
+          <span class="settings-backend-badge" id="settings-tts-backend">Checking…</span>
+        </div>
+        <div class="panel-body">
+          <div class="settings-group">
+
+            <div class="settings-row">
+              <div class="settings-row-label">
+                <span class="settings-label-name">Speed</span>
+                <span class="settings-label-desc">How fast JARVIS speaks</span>
+              </div>
+              <div class="settings-row-control">
+                <span class="settings-val-label" id="settings-speed-label">1.0×</span>
+                <input type="range" class="settings-slider" id="settings-speed"
+                       min="0.5" max="2.0" step="0.05" value="1.0">
+              </div>
+            </div>
+
+            <div class="settings-row">
+              <div class="settings-row-label">
+                <span class="settings-label-name">Volume</span>
+                <span class="settings-label-desc">Output level</span>
+              </div>
+              <div class="settings-row-control">
+                <span class="settings-val-label" id="settings-volume-label">90%</span>
+                <input type="range" class="settings-slider" id="settings-volume"
+                       min="0" max="100" step="5" value="90">
+              </div>
+            </div>
+
+            <div class="settings-row">
+              <div class="settings-row-label">
+                <span class="settings-label-name">Test Voice</span>
+                <span class="settings-label-desc">Play a sample phrase with current settings</span>
+              </div>
+              <div class="settings-row-control">
+                <button class="btn btn-ghost btn-sm" id="settings-test-voice">▶ Test</button>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      </div>
+
+      <!-- AI Behaviour -->
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title"><span class="icon">⬡</span> AI Behaviour</div>
+        </div>
+        <div class="panel-body">
+          <div class="settings-group">
+
+            <div class="settings-row">
+              <div class="settings-row-label">
+                <span class="settings-label-name">Temperature</span>
+                <span class="settings-label-desc">Lower = precise · Higher = creative</span>
+              </div>
+              <div class="settings-row-control">
+                <span class="settings-val-label" id="settings-temp-label">0.7</span>
+                <input type="range" class="settings-slider" id="settings-temperature"
+                       min="0" max="1" step="0.05" value="0.7">
+              </div>
+            </div>
+
+            <div class="settings-row">
+              <div class="settings-row-label">
+                <span class="settings-label-name">Response Length</span>
+                <span class="settings-label-desc">Maximum tokens per reply</span>
+              </div>
+              <div class="settings-row-control settings-row-chips">
+                <button class="settings-chip" data-tokens="1024">Short</button>
+                <button class="settings-chip settings-chip-active" data-tokens="4096">Normal</button>
+                <button class="settings-chip" data-tokens="8192">Long</button>
+              </div>
+            </div>
+
+            <div class="settings-row">
+              <div class="settings-row-label">
+                <span class="settings-label-name">Auto-speak responses</span>
+                <span class="settings-label-desc">Read AI replies aloud automatically</span>
+              </div>
+              <div class="settings-row-control">
+                <label class="settings-toggle">
+                  <input type="checkbox" id="settings-autospeak" checked>
+                  <span class="settings-toggle-track">
+                    <span class="settings-toggle-thumb"></span>
+                  </span>
+                </label>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      </div>
+
+      <!-- System status -->
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title"><span class="icon">⊟</span> System Status</div>
+        </div>
+        <div class="panel-body">
+          <div class="settings-group">
+
+            <div class="settings-row">
+              <div class="settings-row-label">
+                <span class="settings-label-name">TTS Backend</span>
+                <span class="settings-label-desc">Active voice synthesis engine</span>
+              </div>
+              <div class="settings-row-control">
+                <span id="settings-backend-detail" class="settings-val-label">—</span>
+              </div>
+            </div>
+
+            <div class="settings-row">
+              <div class="settings-row-label">
+                <span class="settings-label-name">AI Model</span>
+                <span class="settings-label-desc">Connected language model</span>
+              </div>
+              <div class="settings-row-control">
+                <span class="settings-val-label mono" style="font-size:11px">Groq / llama-3.1-8b-instant</span>
+              </div>
+            </div>
+
+            <div class="settings-row">
+              <div class="settings-row-label">
+                <span class="settings-label-name">Reset to defaults</span>
+                <span class="settings-label-desc">Restore all settings to factory values</span>
+              </div>
+              <div class="settings-row-control">
+                <button class="btn btn-ghost btn-sm" id="settings-reset">↺ Reset</button>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      </div>
+
     </section>
 
   </main>
@@ -439,7 +866,7 @@
   <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/11.8.1/firebase-app.js";
     import { getAuth, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/11.8.1/firebase-auth.js";
-    import { getFirestore, collection, addDoc, getDocs, orderBy, query, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.8.1/firebase-firestore.js";
+    import { getFirestore, collection, addDoc, getDocs, orderBy, query, where, serverTimestamp, doc, setDoc, getDoc, deleteDoc } from "https://www.gstatic.com/firebasejs/11.8.1/firebase-firestore.js";
 
     const firebaseConfig = {{ firebase_json | safe }};
 
@@ -451,9 +878,14 @@
     window.__auth = auth;
 
     onAuthStateChanged(auth, user => {
+      const gate = document.getElementById('auth-gate');
       if (!user) {
         window.location.href = '/login';
         return;
+      }
+      if (gate) {
+        gate.style.opacity = '0';
+        setTimeout(() => gate.remove(), 250);
       }
 
       // Topbar: email chip + sign-out (insert once)
@@ -488,9 +920,10 @@
         document.getElementById('user-provider-label').textContent = provider + ' · ' + created;
       }
 
-      // Load scan history and devices from Firestore
+      // Load scan history, devices, and tags from Firestore
       loadScanHistory(user.uid);
       loadDevices(user.uid);
+      loadDeviceTags(user.uid);
       window.__loadDevices = () => loadDevices(user.uid);
 
       // Restore last scan's CVE + topology data, then auto-run a fresh scan
@@ -588,11 +1021,13 @@
 
           const card = document.createElement('div');
           card.className = 'device-card' + (crit > 0 ? ' device-card-critical' : high > 0 ? ' device-card-high' : '');
+          const savedTag = (window.__deviceTags || {})[hostname] || '';
           card.innerHTML = `
             <div class="device-card-header">
               <div class="device-icon">${distroIcon}</div>
               <div>
                 <div class="device-name">${escHtml(hostname)}</div>
+                ${savedTag ? `<div class="device-tag-label" style="font-size:10px;color:var(--accent);font-family:var(--font-mono);margin-top:1px">${escHtml(savedTag)}</div>` : ''}
                 <div class="device-os">${escHtml(d.os ?? '—')}</div>
               </div>
             </div>
@@ -712,6 +1147,104 @@
       }
     };
 
+    // ── Device tagging + notes ──────────────────────────────────────────────
+    async function loadDeviceTags(uid) {
+      try {
+        const snap = await getDocs(collection(db, 'users', uid, 'device_tags'));
+        window.__deviceTags  = {};
+        window.__deviceNotes = {};
+        snap.forEach(d => {
+          const data = d.data();
+          window.__deviceTags[d.id]  = data.tag   || '';
+          window.__deviceNotes[d.id] = data.notes || '';
+        });
+      } catch (e) {
+        window.__deviceTags  = {};
+        window.__deviceNotes = {};
+      }
+    }
+
+    window.__saveDeviceLabel = async function(hostname, tag, notes) {
+      const user = auth.currentUser;
+      if (!user) return;
+      try {
+        await setDoc(doc(db, 'users', user.uid, 'device_tags', hostname), {
+          tag:       tag   || '',
+          notes:     notes || '',
+          updatedAt: serverTimestamp(),
+        });
+        if (!window.__deviceTags)  window.__deviceTags  = {};
+        if (!window.__deviceNotes) window.__deviceNotes = {};
+        window.__deviceTags[hostname]  = tag   || '';
+        window.__deviceNotes[hostname] = notes || '';
+      } catch (e) {
+        console.error('Failed to save device label', e);
+      }
+    };
+
+    // Keep old name working so nothing else breaks
+    window.__saveDeviceTag = (hostname, tag) => window.__saveDeviceLabel(hostname, tag, window.__deviceNotes?.[hostname] || '');
+
+    window.__getDeviceTag   = (hostname) => (window.__deviceTags  || {})[hostname] || '';
+    window.__getDeviceNotes = (hostname) => (window.__deviceNotes || {})[hostname] || '';
+
+    // ── Device deletion ─────────────────────────────────────────────────────
+    window.__deleteDevice = async function(hostname) {
+      const user = auth.currentUser;
+      if (!user) return { ok: false };
+      try {
+        // Delete all scan docs for this hostname
+        const q    = query(collection(db, 'users', user.uid, 'scans'), where('hostname', '==', hostname));
+        const snap = await getDocs(q);
+        await Promise.all(snap.docs.map(d => deleteDoc(doc(db, 'users', user.uid, 'scans', d.id))));
+        // Delete label/notes
+        await deleteDoc(doc(db, 'users', user.uid, 'device_tags', hostname));
+        // Clear local caches
+        if (window.__deviceCache)  delete window.__deviceCache[hostname];
+        if (window.__deviceTags)   delete window.__deviceTags[hostname];
+        if (window.__deviceNotes)  delete window.__deviceNotes[hostname];
+        return { ok: true, deleted: snap.size };
+      } catch (e) {
+        console.error('Failed to delete device', e);
+        return { ok: false, error: e.message };
+      }
+    };
+
+    // ── Integrity data (per-device, persisted to Firestore) ────────────────
+    window.__saveIntegrityData = async function(hostname, data) {
+      const user = auth.currentUser;
+      if (!user) return;
+      try {
+        await setDoc(doc(db, 'users', user.uid, 'integrity', hostname), {
+          hostname,
+          summary:       data.summary       ?? {},
+          malicious:     (data.malicious    ?? []).slice(0, 200),
+          modified_bins: (data.modified_bins ?? []).slice(0, 200),
+          suid_files:    (data.suid_files    ?? []).slice(0, 500),
+          services:      (data.services      ?? []).slice(0, 300),
+          scannedAt:     serverTimestamp(),
+        });
+      } catch (e) { console.error('saveIntegrityData failed', e); }
+    };
+
+    window.__loadIntegrityData = async function(hostname) {
+      const user = auth.currentUser;
+      if (!user) return null;
+      try {
+        const snap = await getDoc(doc(db, 'users', user.uid, 'integrity', hostname));
+        return snap.exists() ? snap.data() : null;
+      } catch (e) { return null; }
+    };
+
+    window.__loadIntegrityDevices = async function() {
+      const user = auth.currentUser;
+      if (!user) return [];
+      try {
+        const snap = await getDocs(collection(db, 'users', user.uid, 'integrity'));
+        return snap.docs.map(d => ({ hostname: d.id, scannedAt: d.data().scannedAt?.toDate?.() }));
+      } catch (e) { return []; }
+    };
+
     // Expose save function so main.js can call it after a scan
     window.__saveScanResult = async function(result) {
       const user = auth.currentUser;
@@ -726,6 +1259,30 @@
         console.error('Failed to save scan result', e);
       }
     };
+
+    // ── AI narrative cache ──────────────────────────────────────────────────
+    // Cache keys are deterministic (hostname + CVE counts + neighbor count)
+    // so the cache auto-invalidates when the underlying data changes.
+    window.__saveAINarrative = async function(cacheKey, narrative, aiPaths) {
+      const user = auth.currentUser;
+      if (!user) return;
+      try {
+        await setDoc(doc(db, 'users', user.uid, 'ai_cache', cacheKey), {
+          narrative,
+          aiPaths:     aiPaths || null,
+          generatedAt: serverTimestamp(),
+        });
+      } catch (e) { console.error('saveAINarrative failed', e); }
+    };
+
+    window.__loadAINarrative = async function(cacheKey) {
+      const user = auth.currentUser;
+      if (!user) return null;
+      try {
+        const snap = await getDoc(doc(db, 'users', user.uid, 'ai_cache', cacheKey));
+        return snap.exists() ? snap.data() : null;
+      } catch (e) { return null; }
+    };
   </script>
   <!-- =====================================================
        DEVICE DETAIL MODAL (slide-over)
@@ -738,8 +1295,9 @@
           <div id="modal-hostname" class="device-modal-hostname"></div>
           <div id="modal-os" class="device-modal-os"></div>
         </div>
-        <div style="display:flex;align-items:center;gap:10px;flex-shrink:0">
+        <div style="display:flex;align-items:center;gap:8px;flex-shrink:0">
           <span id="modal-risk-badge" class="badge" style="display:none"></span>
+          <button class="btn btn-danger btn-sm" id="modal-delete-btn">⊗ Delete</button>
           <button class="btn btn-ghost btn-sm"
             onclick="document.getElementById('device-modal').style.display='none'">✕ Close</button>
         </div>
@@ -751,5 +1309,51 @@
   </div>
 
   <script src="/static/js/main.js"></script>
+
+  <!-- =====================================================
+       AI ASSISTANT
+       ===================================================== -->
+  <button id="ai-fab" title="J.A.R.V.I.S. — Security Intelligence">
+    <span class="jarvis-fab-label">JAR<span>VIS</span></span>
+  </button>
+
+  <div id="ai-panel" class="ai-panel jarvis-panel" style="display:none">
+    <div class="ai-panel-header jarvis-header">
+      <div class="ai-panel-title">
+        <span class="jarvis-logo">⬡</span>
+        <div>
+          <div class="jarvis-title-main">J.A.R.V.I.S.</div>
+          <div class="jarvis-title-sub">SECURITY INTELLIGENCE // ONLINE</div>
+        </div>
+      </div>
+      <div style="display:flex;gap:5px;align-items:center">
+        <span class="jarvis-status-dot"></span>
+        <button class="btn btn-ghost btn-sm" id="ai-voice-toggle" title="Voice output: on" style="font-size:14px">🔊</button>
+        <button class="btn btn-ghost btn-sm"
+          onclick="document.getElementById('ai-panel').style.display='none'">✕</button>
+      </div>
+    </div>
+    <div class="ai-messages" id="ai-messages">
+      <div class="ai-msg ai-msg-assistant">
+        <div class="ai-msg-content">
+          Good day, sir. J.A.R.V.I.S. is online and all systems are nominal.<br><br>
+          I'm standing by for your instructions. You may click <strong>🤖 Ask AI</strong> on any vulnerability for a threat assessment and remediation protocol. You can also ask me to analyse your network topology for an attack surface briefing.<br><br>
+          Shall we begin?
+        </div>
+      </div>
+    </div>
+    <div class="ai-input-area jarvis-input-area">
+      <textarea id="ai-input" placeholder="Query J.A.R.V.I.S. — threat assessment, patch protocols, topology analysis…" rows="2"></textarea>
+      <div class="ai-input-buttons">
+        <button class="btn btn-ghost btn-sm" id="ai-mic-btn" title="Voice input">🎤</button>
+        <div class="ai-input-buttons-right">
+          <button class="btn btn-ghost btn-sm" id="ai-clear-btn">Clear</button>
+          <button class="btn btn-primary btn-sm" id="ai-send-btn">Transmit ↵</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/js/ai.js"></script>
 </body>
 </html>
