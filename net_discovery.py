@@ -11,8 +11,10 @@ into the GUI.
 """
 
 import json
+import os
 import re
 import shutil
+import signal
 import subprocess
 import threading
 import urllib.request
@@ -45,6 +47,53 @@ def _now_iso():
     return datetime.now(timezone.utc).isoformat()
 
 
+# ── Subprocess lifecycle ─────────────────────────────────────────────────────
+# Long-running scans (nmap) are spawned via _stream(). We track every live
+# subprocess so the GUI can terminate them on shutdown — otherwise nmap keeps
+# sweeping the network as an orphan after the window closes.
+
+_active_procs: set = set()
+_active_lock = threading.Lock()
+
+
+def _terminate(proc) -> None:
+    """Kill a subprocess (and its process group), escalating to SIGKILL. Never raises."""
+    try:
+        if proc.poll() is not None:
+            return
+        # Scans run in their own session (start_new_session=True), so signal the
+        # whole group to also reap anything nmap may have spawned.
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+        except Exception:
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+        try:
+            proc.wait(timeout=2)
+        except Exception:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+    except Exception:  # pragma: no cover - defensive
+        pass
+
+
+def cancel_scans() -> None:
+    """Terminate every in-flight scan subprocess. Call this on app shutdown so
+    nothing is left running after the GUI closes."""
+    with _active_lock:
+        procs = list(_active_procs)
+        _active_procs.clear()
+    for p in procs:
+        _terminate(p)
+
+
 _MAC_RE = re.compile(r"([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5})")
 
 
@@ -59,29 +108,41 @@ def _norm_mac(mac: str) -> str:
 # ── Subnet detection ─────────────────────────────────────────────────────────
 
 def detect_subnet() -> str:
-    """Best-effort local subnet in CIDR form (e.g. 192.168.1.0/24).
+    """Best-effort local /24 in CIDR form (e.g. 192.168.1.0/24).
 
-    Parses `ip route` for the kernel-scope link route, falling back to deriving
-    a /24 from the default-route source address. Returns '' if undetectable.
+    Always returns a /24 (256 hosts max). Crowded/guest WiFi often advertises a
+    /16 or larger on-link route; sweeping that would take minutes, so we clamp to
+    the /24 around our own address — the segment that actually matters. Returns ''
+    if undetectable.
     """
     out, _, _ = _run(["ip", "route"], timeout=8)
-    src_ip = ""
+    src_ip, onlink = "", ""
     for line in out.splitlines():
-        # Prefer an explicit on-link subnet route: "192.168.1.0/24 dev ... scope link"
-        m = re.match(r"^(\d{1,3}(?:\.\d{1,3}){3}/\d{1,2})\s+dev\s+\S+", line)
-        if m and "scope link" in line and "/32" not in m.group(1):
-            cidr = m.group(1)
-            # Skip loopback / link-local
-            if not cidr.startswith(("127.", "169.254.")):
-                return cidr
+        # On-link subnet route: "192.168.1.0/24 dev ... scope link"
+        m = re.match(r"^(\d{1,3}(?:\.\d{1,3}){3})/(\d{1,2})\s+dev\s+\S+", line)
+        if m and "scope link" in line and m.group(2) != "32":
+            net, prefix = m.group(1), int(m.group(2))
+            if not net.startswith(("127.", "169.254.")) and not onlink and prefix >= 24:
+                onlink = f"{net}/{prefix}"
         sm = re.search(r"\bsrc\s+(\d{1,3}(?:\.\d{1,3}){3})", line)
         if sm and not src_ip:
             src_ip = sm.group(1)
 
+    # Prefer our own /24 (caps the sweep); use an on-link /24+ route otherwise.
     if src_ip:
-        parts = src_ip.split(".")
-        if len(parts) == 4:
-            return f"{parts[0]}.{parts[1]}.{parts[2]}.0/24"
+        p = src_ip.split(".")
+        if len(p) == 4:
+            return f"{p[0]}.{p[1]}.{p[2]}.0/24"
+    return onlink
+
+
+def _default_gateway() -> str:
+    """Return the default-gateway IP (e.g. 192.168.1.1), or '' if unknown."""
+    out, _, _ = _run(["ip", "route"], timeout=8)
+    for line in out.splitlines():
+        m = re.match(r"^default\s+via\s+(\d{1,3}(?:\.\d{1,3}){3})", line)
+        if m:
+            return m.group(1)
     return ""
 
 
@@ -152,18 +213,24 @@ def _stream(cmd, on_line, timeout=240):
     """
     lines: list = []
     try:
+        # start_new_session puts the child in its own process group so we can
+        # reliably kill the whole tree (see _terminate / cancel_scans).
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
-                                stderr=subprocess.DEVNULL, text=True, bufsize=1)
+                                stderr=subprocess.DEVNULL, text=True, bufsize=1,
+                                start_new_session=True)
     except FileNotFoundError:
         return ""
     except Exception:  # pragma: no cover - defensive
         return ""
 
+    with _active_lock:
+        _active_procs.add(proc)
+
     def _kill_after():
         try:
             proc.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
-            proc.kill()
+            _terminate(proc)
 
     threading.Thread(target=_kill_after, daemon=True).start()
     try:
@@ -185,7 +252,9 @@ def _stream(cmd, on_line, timeout=240):
         try:
             proc.wait(timeout=5)
         except Exception:
-            pass
+            _terminate(proc)
+        with _active_lock:
+            _active_procs.discard(proc)
     return "\n".join(lines)
 
 
@@ -389,12 +458,14 @@ def _ping_ttl(ip: str) -> int | None:
     return int(m.group(1)) if m else None
 
 
-def guess_os(ip: str, mac: str = "", vendor: str = "", hostname: str = "") -> str:
+def guess_os(ip: str, mac: str = "", vendor: str = "", hostname: str = "",
+             ttl_ping: bool = True) -> str:
     """Best-effort OS guess from vendor heuristics + a single ping's TTL.
 
     No root required. Vendor wins when it's unambiguous (Apple, Raspberry Pi,
     routers); otherwise the TTL of one echo reply hints at the OS family
-    (~64 Linux/Unix/macOS, ~128 Windows, ~255 network gear).
+    (~64 Linux/Unix/macOS, ~128 Windows, ~255 network gear). Pass ttl_ping=False
+    to skip the ping (used by the fast scan to stay within its time budget).
     """
     hay = f"{vendor or ''} {hostname or ''}".lower()
     if "apple" in hay:
@@ -409,7 +480,7 @@ def guess_os(ip: str, mac: str = "", vendor: str = "", hostname: str = "") -> st
     if dtype == "Android/Mobile":
         return "Android"
 
-    ttl = _ping_ttl(ip)
+    ttl = _ping_ttl(ip) if ttl_ping else None
     if ttl is not None:
         if ttl <= 64:
             return "Linux/Unix/macOS"
@@ -421,81 +492,130 @@ def guess_os(ip: str, mac: str = "", vendor: str = "", hostname: str = "") -> st
 
 # ── Top-level discovery ──────────────────────────────────────────────────────
 
+# Ports worth surfacing: remote access, file shares, web, databases, printers,
+# cameras, media. A host is "notable" only if it exposes at least one of these —
+# that's what keeps the scan fast and the map readable on a crowded network.
+NOTABLE_PORTS = ("21,22,23,25,53,80,110,135,139,143,443,445,515,554,631,"
+                 "993,1433,3306,3389,5432,5900,8000,8080,8443,9100,32400")
+
+
+def _nmap_notable(subnet: str, progress=None) -> dict:
+    """One batched nmap across the whole subnet for NOTABLE_PORTS.
+
+    A single invocation (nmap parallelises internally) instead of probing every
+    host serially — this is what brings the scan under 30s. Returns
+    {ip: {hostname, mac, vendor, open_ports[], services[]}} for hosts with at
+    least one notable port open. Never raises.
+    """
+    hosts: dict = {}
+    if not shutil.which("nmap") or not subnet:
+        return hosts
+
+    cur = {"ip": "", "hostname": "", "mac": "", "vendor": "",
+           "open_ports": [], "services": []}
+
+    def _flush():
+        if cur["ip"] and cur["open_ports"]:
+            hosts[cur["ip"]] = {
+                "ip": cur["ip"], "hostname": cur["hostname"], "mac": cur["mac"],
+                "vendor": cur["vendor"], "open_ports": list(cur["open_ports"]),
+                "services": list(cur["services"]),
+            }
+
+    def _on_line(line):
+        nonlocal cur
+        line = line.strip()
+        if line.startswith("Nmap scan report for "):
+            _flush()
+            rest = line[len("Nmap scan report for "):].strip()
+            m = re.search(r"\(([^)]+)\)", rest)
+            if m:
+                cur = {"ip": m.group(1),
+                       "hostname": rest[:rest.index("(")].strip(),
+                       "mac": "", "vendor": "", "open_ports": [], "services": []}
+            else:
+                cur = {"ip": rest, "hostname": "", "mac": "", "vendor": "",
+                       "open_ports": [], "services": []}
+        elif re.match(r"^\d+/tcp\s+open", line):
+            pm = re.match(r"^(\d+)/tcp\s+open\s+(\S+)?", line)
+            if pm:
+                port = int(pm.group(1))
+                svc = (pm.group(2) or _PORT_NAMES.get(port, "")).strip()
+                label = f"{port}/tcp" + (f" {svc}" if svc and svc not in ("open", "?") else "")
+                cur["open_ports"].append(label)
+                if svc and svc not in ("open", "?"):
+                    cur["services"].append(svc)
+        elif line.startswith("MAC Address:"):
+            cur["mac"] = _norm_mac(line)
+            vm = re.search(r"\(([^)]*)\)", line)
+            if vm:
+                cur["vendor"] = vm.group(1).strip()
+        elif line.startswith("Stats:") or "% done" in line:
+            _emit(progress, line)
+
+    cmd = ["nmap", "-p", NOTABLE_PORTS, "--open", "-T4",
+           "--host-timeout", "8s", "--max-retries", "1",
+           "-n", "--stats-every", "3s", subnet]
+    _stream(cmd, _on_line, timeout=28)
+    _flush()
+    return hosts
+
+
 def discover(subnet: str | None = None, progress=None, enrich: bool = True) -> list:
-    """Discover devices on the local network.
+    """Discover *notable* devices on the local network — fast (<30s).
 
-    Returns a list of dicts:
-      {ip, mac, vendor, device_type, os_guess, os_details, open_ports,
-       services, hostname, source, first_seen, last_seen}
-
-    Merges nmap host-discovery with the ARP/neighbor table, enriches each entry
-    with vendor/device-type/OS guesses and (when enrich=True) a per-host
-    port/service/OS probe, then de-duplicates by MAC (falling back to IP when the
-    MAC is unknown). `progress` is an optional callable(str) that receives live
-    status lines so a GUI can show what is currently being scanned. Always
-    returns a list — never raises.
+    A device is notable if it exposes a notable port (see NOTABLE_PORTS) or is
+    the default gateway. This deliberately ignores the crowd of plain clients
+    (phones/laptops with no open ports) so the scan stays quick and the map stays
+    readable on busy networks. `enrich` is accepted for backwards-compatibility
+    but no longer triggers slow per-host probing. Never raises.
     """
     if not subnet:
         _emit(progress, "Detecting local subnet…")
         subnet = detect_subnet()
+    if not subnet:
+        _emit(progress, "Could not detect a local subnet.")
+        return []
 
     _emit(progress, "Reading ARP / neighbor table…")
     arp = _arp_table()
-    _emit(progress, f"Sweeping {subnet or 'local network'} for live hosts…")
-    nmap_hosts = _nmap_hosts(subnet, progress) if subnet else []
+    _emit(progress, f"Scanning {subnet} for notable devices…")
+    found = _nmap_notable(subnet, progress)
 
-    # Merge by IP first so ARP hostnames/MACs and nmap MACs reinforce each other.
-    by_ip: dict = {}
-
-    def _merge(ip, mac="", hostname="", vendor=""):
-        if not ip:
-            return
-        rec = by_ip.setdefault(ip, {"ip": ip, "mac": "", "hostname": "", "vendor": ""})
-        mac = _norm_mac(mac)
-        if mac:
-            rec["mac"] = mac
-        if hostname and not rec["hostname"]:
-            rec["hostname"] = hostname
-        if vendor and not rec["vendor"]:
-            rec["vendor"] = vendor
-
-    for h in nmap_hosts:
-        _merge(h.get("ip", ""), h.get("mac", ""),
-               h.get("hostname", ""), h.get("vendor", ""))
-    for ip, info in arp.items():
-        _merge(ip, info.get("mac", ""), info.get("hostname", ""))
-
+    gw = _default_gateway()
     now = _now_iso()
     devices: list = []
-    total = len(by_ip)
-    for idx, (ip, rec) in enumerate(by_ip.items(), 1):
-        mac = rec["mac"]
-        vendor = rec["vendor"] or (mac_vendor(mac) if mac else "")
-        hostname = rec["hostname"]
-        dev = {
+
+    for ip, rec in found.items():
+        mac = rec["mac"] or arp.get(ip, {}).get("mac", "")
+        hostname = rec["hostname"] or arp.get(ip, {}).get("hostname", "")
+        vendor = rec["vendor"]   # from nmap when privileged; no slow OUI lookup
+        devices.append({
             "ip": ip,
             "mac": mac,
             "vendor": vendor,
-            "device_type": guess_device_type(vendor, hostname),
-            "os_guess": guess_os(ip, mac, vendor, hostname),
+            "device_type": "Router/Gateway" if ip == gw else guess_device_type(vendor, hostname),
+            "os_guess": guess_os(ip, mac, vendor, hostname, ttl_ping=False),
             "os_details": "",
-            "open_ports": [],
-            "services": [],
+            "open_ports": rec["open_ports"],
+            "services": rec["services"],
             "hostname": hostname,
-            "source": "nmap" if mac or vendor else "arp",
+            "source": "nmap",
             "first_seen": now,
             "last_seen": now,
-        }
-        if enrich:
-            _emit(progress, f"[{idx}/{total}] Fingerprinting {ip}…")
-            extra = _nmap_enrich(ip, progress)
-            dev["open_ports"] = extra["open_ports"]
-            dev["services"] = extra["services"]
-            dev["os_details"] = extra["os_details"]
-            # A concrete nmap OS fingerprint beats the TTL/vendor heuristic.
-            if extra["os_details"]:
-                dev["os_guess"] = extra["os_details"]
-        devices.append(dev)
+        })
+
+    # The gateway is always notable — include it even if it exposed no port.
+    if gw and gw not in found:
+        info = arp.get(gw, {})
+        devices.append({
+            "ip": gw, "mac": info.get("mac", ""), "vendor": "",
+            "device_type": "Router/Gateway",
+            "os_guess": "Embedded/Network OS", "os_details": "",
+            "open_ports": [], "services": [],
+            "hostname": info.get("hostname", ""),
+            "source": "arp", "first_seen": now, "last_seen": now,
+        })
 
     # Dedup by MAC (or ip_<ip> when MAC unknown); keep the richest record.
     deduped: dict = {}
@@ -515,6 +635,7 @@ def discover(subnet: str | None = None, progress=None, enrich: bool = True) -> l
     out = list(deduped.values())
     out.sort(key=lambda d: tuple(int(p) for p in d["ip"].split(".")
                                  if p.isdigit()) or (0,))
+    _emit(progress, f"Found {len(out)} notable device(s).")
     return out
 
 

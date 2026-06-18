@@ -121,22 +121,22 @@
 
       <!-- Summary stat cards -->
       <div class="stat-grid" id="summary-stats">
-        <div class="stat-card">
+        <div class="stat-card stat-card-jump" data-cve-filter="critical">
           <div class="stat-label">Critical CVEs</div>
           <div class="stat-value cvss-critical" id="stat-critical">—</div>
           <div class="stat-sub">Requires immediate action</div>
         </div>
-        <div class="stat-card">
+        <div class="stat-card stat-card-jump" data-cve-filter="high">
           <div class="stat-label">High CVEs</div>
           <div class="stat-value cvss-high" id="stat-high">—</div>
           <div class="stat-sub">Patch within 7 days</div>
         </div>
-        <div class="stat-card">
+        <div class="stat-card stat-card-jump" data-cve-filter="medium,low">
           <div class="stat-label">Medium / Low</div>
           <div class="stat-value" id="stat-other">—</div>
           <div class="stat-sub">Review when possible</div>
         </div>
-        <div class="stat-card">
+        <div class="stat-card stat-card-jump" data-jump="section-apps">
           <div class="stat-label">Apps Scanned</div>
           <div class="stat-value text-accent" id="stat-apps">—</div>
           <div class="stat-sub">Installed packages</div>
@@ -532,6 +532,7 @@
             </div>
             <button class="btn btn-ghost btn-sm" id="topo-ai-btn">AI Attack Vectors</button>
             <button class="btn btn-ghost btn-sm" id="topo-rebuild-btn">↺ Rebuild</button>
+            <button class="btn btn-ghost btn-sm" id="topo-clear-btn">✕ Clear all</button>
           </div>
         </div>
         <div class="topo-filters" id="topo-filters">
@@ -598,6 +599,7 @@
           <div class="panel-title"><span class="icon">⊟</span> Devices</div>
           <div style="display:flex;align-items:center;gap:10px">
             <button class="btn btn-ghost btn-sm" id="devices-refresh-btn" onclick="window.__loadDiscovered?.()">↺ Refresh</button>
+            <button class="btn btn-ghost btn-sm" id="devices-clear-btn">✕ Clear all</button>
             <span class="text-muted" style="font-size:12px" id="devices-count">—</span>
           </div>
         </div>
@@ -952,7 +954,7 @@ curl -O https://scanoasis.tech/download/gui.py</code></pre>
   <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/11.8.1/firebase-app.js";
     import { getAuth, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/11.8.1/firebase-auth.js";
-    import { getFirestore, collection, addDoc, getDocs, orderBy, query, where, serverTimestamp, doc, setDoc, getDoc, deleteDoc } from "https://www.gstatic.com/firebasejs/11.8.1/firebase-firestore.js";
+    import { getFirestore, collection, addDoc, getDocs, orderBy, query, where, serverTimestamp, doc, setDoc, getDoc, deleteDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.8.1/firebase-firestore.js";
 
     const firebaseConfig = {{ firebase_json | safe }};
 
@@ -966,6 +968,7 @@ curl -O https://scanoasis.tech/download/gui.py</code></pre>
     onAuthStateChanged(auth, user => {
       const gate = document.getElementById('auth-gate');
       if (!user) {
+        _stopRealtime();
         window.location.href = '/login';
         return;
       }
@@ -1023,6 +1026,10 @@ curl -O https://scanoasis.tech/download/gui.py</code></pre>
         window.__loadDiscovered?.();
         window.__renderAllCVEs?.();
       });
+
+      // Subscribe to live updates so agent-written devices/scans appear without
+      // a manual refresh. (Skips its own initial callback — see _startRealtime.)
+      _startRealtime(user.uid);
 
       // Restore last scan's CVE + topology data, then auto-run a fresh scan
       window.__loadLastScanData(user.uid).then(data => {
@@ -1273,41 +1280,117 @@ curl -O https://scanoasis.tech/download/gui.py</code></pre>
 
     // Devices discovered on the LAN by the desktop agent (MAC / vendor / OS /
     // open ports). Stored under users/{uid}/network_devices, keyed by MAC/IP.
+    // Map a network_devices snapshot to the array shape the UI expects.
+    // Shared by the one-shot fetch and the realtime listener.
+    function _mapNetworkDevices(snap) {
+      const out = [];
+      snap.forEach(doc => {
+        const d = doc.data();
+        out.push({
+          id:          doc.id,
+          ip:          d.ip          || '',
+          mac:         d.mac         || '',
+          vendor:      d.vendor      || '',
+          device_type: d.device_type || '',
+          os_guess:    d.os_guess    || '',
+          os_details:  d.os_details  || '',
+          hostname:    d.hostname    || '',
+          open_ports:  Array.isArray(d.open_ports) ? d.open_ports : [],
+          services:    Array.isArray(d.services)   ? d.services   : [],
+          first_seen:  d.first_seen  || '',
+          last_seen:   d.last_seen   || '',
+        });
+      });
+      // The Devices list shows ALL devices in the DB, sorted by IP. The Attack
+      // Map renders a notable subset of this same list (so map devices are always
+      // a subset of — and in sync with — the Devices list). A high safety cap
+      // prevents a runaway scan from melting the page; use "Clear all" to reset.
+      const LIST_CAP = 250;
+      const ipKey = d => d.ip.split('.').reduce((acc, o) => acc * 256 + (Number(o) || 0), 0);
+      out.sort((a, b) => ipKey(a) - ipKey(b));
+      return out.slice(0, LIST_CAP);
+    }
+
     window.__getNetworkDevices = async function() {
       const user = auth.currentUser;
       if (!user) return [];
       try {
         const snap = await getDocs(collection(db, 'users', user.uid, 'network_devices'));
-        const out = [];
-        snap.forEach(doc => {
-          const d = doc.data();
-          out.push({
-            id:          doc.id,
-            ip:          d.ip          || '',
-            mac:         d.mac         || '',
-            vendor:      d.vendor      || '',
-            device_type: d.device_type || '',
-            os_guess:    d.os_guess    || '',
-            os_details:  d.os_details  || '',
-            hostname:    d.hostname    || '',
-            open_ports:  Array.isArray(d.open_ports) ? d.open_ports : [],
-            services:    Array.isArray(d.services)   ? d.services   : [],
-            first_seen:  d.first_seen  || '',
-            last_seen:   d.last_seen   || '',
-          });
-        });
-        // Sort numerically by IP for a stable, readable order.
-        out.sort((a, b) => {
-          const pa = a.ip.split('.').map(Number), pb = b.ip.split('.').map(Number);
-          for (let i = 0; i < 4; i++) if ((pa[i]||0) !== (pb[i]||0)) return (pa[i]||0) - (pb[i]||0);
-          return 0;
-        });
-        return out;
+        return _mapNetworkDevices(snap);
       } catch (e) {
         console.error('getNetworkDevices failed', e);
         return [];
       }
     };
+
+    // Delete a LAN-discovered device by its Firestore doc id (sanitized MAC/IP).
+    window.__deleteNetworkDevice = async function(docId) {
+      const user = auth.currentUser;
+      if (!user || !docId) return { ok: false, error: 'not signed in' };
+      try {
+        await deleteDoc(doc(db, 'users', user.uid, 'network_devices', docId));
+        return { ok: true };
+      } catch (e) {
+        console.error('Failed to delete network device', e);
+        return { ok: false, error: e.message };
+      }
+    };
+
+    // Wipe every LAN-discovered device — clears the map of stale/garbage hosts.
+    // Deletes in chunks so a huge backlog (1000+ docs) doesn't stall the connection.
+    window.__clearNetworkDevices = async function() {
+      const user = auth.currentUser;
+      if (!user) return { ok: false, error: 'not signed in' };
+      try {
+        const snap = await getDocs(collection(db, 'users', user.uid, 'network_devices'));
+        const docs = snap.docs;
+        for (let i = 0; i < docs.length; i += 50) {
+          await Promise.all(docs.slice(i, i + 50).map(
+            d => deleteDoc(doc(db, 'users', user.uid, 'network_devices', d.id))));
+        }
+        return { ok: true, deleted: docs.length };
+      } catch (e) {
+        console.error('clearNetworkDevices failed', e);
+        return { ok: false, error: e.message };
+      }
+    };
+
+    // ── Realtime listeners ────────────────────────────────────────────────────
+    // Live-update the map, device list and scan history as the desktop agent
+    // writes to Firestore — no manual refresh needed. The initial render is still
+    // done by the explicit loaders in onAuthStateChanged (which preserve ordering:
+    // scans → deviceCache → discovered overlay), so each listener SKIPS its first
+    // (initial-state) callback and only reacts to subsequent changes.
+    let _rtUnsubs = [];
+    function _stopRealtime() {
+      _rtUnsubs.forEach(u => { try { u(); } catch (_) {} });
+      _rtUnsubs = [];
+    }
+    function _startRealtime(uid) {
+      _stopRealtime();   // guard against double-subscribe if auth fires twice
+      let netFirst = true, scanFirst = true;
+      _rtUnsubs.push(onSnapshot(
+        collection(db, 'users', uid, 'network_devices'),
+        snap => {
+          if (netFirst) { netFirst = false; return; }
+          // Feed the already-delivered docs straight to the renderer (no re-fetch).
+          window.__loadDiscovered?.(_mapNetworkDevices(snap));
+        },
+        err => console.error('network_devices listener', err)
+      ));
+      _rtUnsubs.push(onSnapshot(
+        collection(db, 'users', uid, 'scans'),
+        () => {
+          if (scanFirst) { scanFirst = false; return; }
+          // A new scan landed — refresh history + scanned-device cards, then the
+          // discovered overlay (which dedupes against scanned hosts).
+          loadScanHistory(uid);
+          loadDevices(uid).then(() => window.__loadDiscovered?.());
+        },
+        err => console.error('scans listener', err)
+      ));
+    }
+    window.__stopRealtime = _stopRealtime;
 
     // ── Device tagging + notes ──────────────────────────────────────────────
     async function loadDeviceTags(uid) {
@@ -1361,6 +1444,13 @@ curl -O https://scanoasis.tech/download/gui.py</code></pre>
         await Promise.all(snap.docs.map(d => deleteDoc(doc(db, 'users', user.uid, 'scans', d.id))));
         // Delete label/notes
         await deleteDoc(doc(db, 'users', user.uid, 'device_tags', hostname));
+        // Also remove any LAN-discovered entry for the same host so it doesn't
+        // reappear on the map as a "discovered" device after deletion.
+        try {
+          const nq    = query(collection(db, 'users', user.uid, 'network_devices'), where('hostname', '==', hostname));
+          const nsnap = await getDocs(nq);
+          await Promise.all(nsnap.docs.map(nd => deleteDoc(doc(db, 'users', user.uid, 'network_devices', nd.id))));
+        } catch (_) { /* best-effort */ }
         // Clear local caches
         if (window.__deviceCache)  delete window.__deviceCache[hostname];
         if (window.__deviceTags)   delete window.__deviceTags[hostname];
@@ -1498,6 +1588,33 @@ curl -O https://scanoasis.tech/download/gui.py</code></pre>
     const _esc = s => String(s ?? '').replace(/[&<>"']/g, c =>
       ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
+    // Robust clipboard copy. navigator.clipboard is undefined on insecure
+    // origins (e.g. http://192.168.x.x:5000, which is exactly how agents reach
+    // this dashboard), so fall back to a hidden textarea + execCommand.
+    function _copyText(text) {
+      if (navigator.clipboard && window.isSecureContext) {
+        return navigator.clipboard.writeText(text).catch(() => _fallbackCopy(text));
+      }
+      return _fallbackCopy(text);
+    }
+    function _fallbackCopy(text) {
+      return new Promise((resolve, reject) => {
+        try {
+          const ta = document.createElement('textarea');
+          ta.value = text;
+          ta.style.position = 'fixed';
+          ta.style.top = '-1000px';
+          ta.style.opacity = '0';
+          document.body.appendChild(ta);
+          ta.focus();
+          ta.select();
+          const ok = document.execCommand('copy');
+          document.body.removeChild(ta);
+          ok ? resolve() : reject(new Error('execCommand failed'));
+        } catch (e) { reject(e); }
+      });
+    }
+
     async function _refreshTokenList() {
       const list = document.getElementById('token-list');
       if (!list) return;
@@ -1582,7 +1699,11 @@ curl -O https://scanoasis.tech/download/gui.py</code></pre>
               <button class="btn btn-ghost btn-sm" style="margin-top:8px;font-size:11px" id="dismiss-token-result">Dismiss</button>
             </div>`;
           document.getElementById('copy-token-btn')?.addEventListener('click', function() {
-            navigator.clipboard.writeText(d.token).then(() => { this.textContent = 'Copied!'; });
+            const btn = this;
+            _copyText(d.token)
+              .then(() => { btn.textContent = 'Copied!'; })
+              .catch(() => { btn.textContent = 'Select & ⌘/Ctrl+C'; })
+              .finally(() => setTimeout(() => { btn.textContent = 'Copy'; }, 2000));
           });
           document.getElementById('dismiss-token-result')?.addEventListener('click', () => {
             resultEl.style.display = 'none';

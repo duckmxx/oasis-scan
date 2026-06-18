@@ -208,6 +208,25 @@ document.querySelectorAll('[data-jump]').forEach(el => {
   });
 });
 
+/* --- Stat cards: jump to CVEs page with a severity filter pre-applied --- */
+function gotoCVEsWithFilter(sevs) {
+  const navItem = document.querySelector('.nav-item[data-section="section-cves"]');
+  if (navItem) navItem.click();
+  setTimeout(() => {
+    // Reset every chip, then activate only the requested severities.
+    document.querySelectorAll('#cve-filter-bar .filter-chip, #cve-type-filter-bar .filter-chip')
+      .forEach(c => c.classList.remove('active'));
+    sevs.forEach(s => {
+      const chip = document.querySelector(`#cve-filter-bar .filter-chip[data-sev="${s}"]`);
+      if (chip) chip.classList.add('active');
+    });
+    filterCVETable();
+  }, 80);
+}
+document.querySelectorAll('[data-cve-filter]').forEach(el => {
+  el.addEventListener('click', () => gotoCVEsWithFilter(el.dataset.cveFilter.split(',')));
+});
+
 /* --- Severity filter chips --- */
 document.querySelectorAll('.filter-chip').forEach(chip => {
   chip.addEventListener('click', () => {
@@ -528,14 +547,22 @@ function populateIntegrity(data, hostname) {
   const suid = data.suid_files    ?? [];
   const svcs = data.services      ?? [];
 
-  // Device chip
+  // Device chip — do NOT rebuild the multi-device selector here, or switching
+  // devices would wipe the other chips (the bug where viewing host B deleted
+  // host A's chip). Just mark the active one; only build a single static chip
+  // when no selector exists yet.
   if (hostname) {
     const toolbar = document.getElementById('integrity-toolbar');
     const chipBox = document.getElementById('integrity-dev-chips');
     if (toolbar && chipBox) {
-      const tag = window.__deviceTags?.[hostname] || '';
-      chipBox.innerHTML = `<span style="font-size:11px;color:var(--text-muted);margin-right:4px">Device:</span>
-        <span class="sec-dev-chip active" style="cursor:default">${escapeHtml(tag || hostname)}</span>`;
+      const existing = chipBox.querySelectorAll('.sec-dev-chip[data-host]');
+      if (existing.length) {
+        existing.forEach(c => c.classList.toggle('active', c.dataset.host === hostname));
+      } else {
+        const tag = window.__deviceTags?.[hostname] || '';
+        chipBox.innerHTML = `<span style="font-size:11px;color:var(--text-muted);margin-right:4px">Device:</span>
+          <span class="sec-dev-chip active" style="cursor:default">${escapeHtml(tag || hostname)}</span>`;
+      }
       toolbar.classList.remove('hidden');
     }
   }
@@ -843,8 +870,11 @@ function _renderVulnerableTable(vulnMap, pkgList, match) {
   tbody.innerHTML = rows.map(([name, info]) => {
     const pkg     = pkgList.find(p => p.name === name);
     const version = pkg?.version || info.version || '—';
-    return `<tr>
-      <td class="mono">${escapeHtml(name)}</td>
+    const firstCve = info.cves[0]?.id || '';
+    // Click a vulnerable package to jump straight to its patch plan.
+    return `<tr class="cve-row" style="cursor:pointer" title="Open patch plan for ${escapeHtml(name)}"
+        onclick="window.__gotoPatch('${escapeHtml(name)}','${escapeHtml(firstCve)}')">
+      <td class="mono">${escapeHtml(name)} <span style="color:var(--accent);font-size:11px;font-weight:600">Patch →</span></td>
       <td class="mono" style="font-size:11px;color:var(--text-secondary)">${escapeHtml(version)}</td>
       <td style="font-size:12px">${info.cves.length}</td>
       <td><span class="cvss-${info.worstSev}" style="font-weight:600">${info.worstSev}</span></td>
@@ -931,10 +961,16 @@ function populateOverviewCVEs(cves, counts) {
   box.innerHTML = top.map(c => {
     const sev   = c.severity || 'unknown';
     const score = c.cvss != null ? Number(c.cvss).toFixed(1) : '—';
-    return `<div class="ov-cve-row">
+    // Link straight to the CVE's advisory page (provided URL, else NVD/Arch).
+    const id    = String(c.id || '');
+    const url   = c.url
+      || (id.startsWith('CVE-') ? `https://nvd.nist.gov/vuln/detail/${id}`
+        : id.startsWith('ASA-') ? `https://security.archlinux.org/advisory/${id}` : '');
+    const open  = url ? ` style="cursor:pointer" title="Open ${escapeHtml(id)} advisory" onclick="window.open('${escapeHtml(url)}','_blank','noopener')"` : '';
+    return `<div class="ov-cve-row"${open}>
       <span class="cvss-score cvss-${sev}">${score}</span>
       <div class="ov-cve-main">
-        <span class="cve-id mono">${escapeHtml(c.id)}</span>
+        <span class="cve-id mono">${escapeHtml(c.id)}${url ? ' <span style="color:var(--accent);font-size:10px">↗</span>' : ''}</span>
         <span class="ov-cve-pkg">${escapeHtml(c.package)}</span>
       </div>
       <span class="badge badge-${sev}">${sev}</span>
@@ -1631,7 +1667,7 @@ function _discoveredIcon(t) {
 
 // Pull discovered LAN devices from Firestore and render them as cards in the
 // Devices grid, below the scanned systems. Also feeds the topology/attack web.
-window.__loadDiscovered = async function() {
+window.__loadDiscovered = async function(provided) {
   if (typeof window.__getNetworkDevices !== 'function') return [];
   const grid  = document.getElementById('devices-grid');
   const count = document.getElementById('devices-count');
@@ -1640,7 +1676,8 @@ window.__loadDiscovered = async function() {
 
   let devices = [];
   try {
-    devices = await window.__getNetworkDevices();
+    // Realtime listener passes the already-fetched array; otherwise fetch once.
+    devices = Array.isArray(provided) ? provided : await window.__getNetworkDevices();
     window.__netDevices = devices;
 
     if (grid) {
@@ -1763,7 +1800,26 @@ window.__openDiscoveredModal = function(d) {
     <div class="modal-section"><div class="text-muted" style="font-size:11px">Discovered on the local network by the Scan Oasis desktop agent. Run a full system scan on this host to see CVEs and patch guidance.</div></div>`;
 
   const delBtn = document.getElementById('modal-delete-btn');
-  if (delBtn) delBtn.onclick = () => { modal.style.display = 'none'; };
+  if (delBtn) {
+    delBtn.disabled = false;
+    delBtn.textContent = '⊗ Delete';
+    delBtn.onclick = async () => {
+      if (!confirm(`Remove "${title}" from the network map?\n\nThis deletes the discovered device. It will reappear if the agent finds it again on the next scan.`)) return;
+      delBtn.disabled = true;
+      delBtn.textContent = 'Deleting…';
+      const result = await window.__deleteNetworkDevice?.(d.id);
+      if (result?.ok) {
+        modal.style.display = 'none';
+        // The realtime listener will redraw; also refresh immediately as a
+        // fallback in case live updates aren't active.
+        window.__loadDiscovered?.();
+      } else {
+        delBtn.disabled = false;
+        delBtn.textContent = '⊗ Delete';
+        alert('Delete failed: ' + (result?.error || 'unknown error'));
+      }
+    };
+  }
 
   modal.style.display = 'flex';
 };
@@ -1774,6 +1830,22 @@ window.__openDiscoveredModal = function(d) {
 
 document.getElementById('devices-map-rebuild')?.addEventListener('click', () => {
   if (window.__deviceCache) buildDeviceNetworkMap(Object.values(window.__deviceCache));
+});
+
+// Clear all discovered LAN devices (wipes stale/garbage hosts from the map).
+document.getElementById('devices-clear-btn')?.addEventListener('click', async () => {
+  if (!confirm('Clear ALL discovered network devices?\n\nThis permanently deletes every device on the map. They repopulate on the next agent scan.')) return;
+  const btn = document.getElementById('devices-clear-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Clearing…'; }
+  const result = await window.__clearNetworkDevices?.();
+  if (btn) { btn.disabled = false; btn.textContent = '✕ Clear all'; }
+  if (result?.ok) {
+    showToast(`Cleared ${result.deleted} device${result.deleted !== 1 ? 's' : ''}`, 'info');
+    window.__netDevices = [];
+    window.__loadDiscovered?.([]);   // re-render empty; realtime listener also fires
+  } else {
+    showToast('Clear failed: ' + (result?.error || 'unknown error'), 'warning');
+  }
 });
 
 // Wire nav click to trigger device map build
@@ -1949,6 +2021,9 @@ window.__openDeviceModal = function(d) {
   // Wire delete button
   const deleteBtn = document.getElementById('modal-delete-btn');
   if (deleteBtn) {
+    // Reset state in case a prior delete left it disabled/"Deleting…".
+    deleteBtn.disabled = false;
+    deleteBtn.textContent = '⊗ Delete';
     deleteBtn.onclick = async () => {
       const confirmed = confirm(
         `Delete "${hostname}" from Scan Oasis?\n\nThis removes all scan history and labels for this device. It cannot be undone.`
@@ -2124,6 +2199,25 @@ document.getElementById('topo-rebuild-btn')?.addEventListener('click', () => {
   if (_lastReport) runTopologyBuild();
 });
 
+// Clear all discovered devices from the Attack Map (and the device DB). Wipes
+// the stale/garbage hosts that clutter and lag the map, then rebuilds it clean.
+document.getElementById('topo-clear-btn')?.addEventListener('click', async () => {
+  if (!confirm('Clear ALL discovered network devices from the map?\n\nThis permanently deletes every discovered device. They repopulate on the next agent scan.')) return;
+  const btn = document.getElementById('topo-clear-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Clearing…'; }
+  const result = await window.__clearNetworkDevices?.();
+  if (btn) { btn.disabled = false; btn.textContent = '✕ Clear all'; }
+  if (result?.ok) {
+    showToast(`Cleared ${result.deleted} device${result.deleted !== 1 ? 's' : ''}`, 'info');
+    window.__netDevices = [];
+    window.__loadDiscovered?.([]);                  // refresh the Devices list
+    if (_lastReport) runTopologyBuild();            // rebuild the map without them
+    else if (window.__lastTopo) renderTopology(window.__lastTopo, _cveData, [], null, []);
+  } else {
+    showToast('Clear failed: ' + (result?.error || 'unknown error'), 'warning');
+  }
+});
+
 // Explicit, user-triggered AI attack analysis. Cache-aware: only spends tokens
 // if there is no cached analysis for the current host + CVE posture.
 window.__genAttackAnalysis = function () {
@@ -2221,6 +2315,17 @@ function _attachNetInfo(data, nd) {
   if (nd.hostname)    data.dhostname = nd.hostname;
 }
 
+// Pick the "notable" devices for the Attack Map: those exposing an open port or
+// acting as a router/gateway, most-exposed first, capped. Keeps the map a
+// readable subset of the full (Devices-list) device set.
+function _notableNetDevices(netDevices, cap = 50) {
+  const isRouter = d => /router|gateway/i.test(d.device_type || '');
+  const notable = (netDevices || []).filter(d => (d.open_ports?.length > 0) || isRouter(d));
+  notable.sort((a, b) => (isRouter(b) - isRouter(a))
+                      || ((b.open_ports?.length || 0) - (a.open_ports?.length || 0)));
+  return notable.slice(0, cap);
+}
+
 function renderTopology(topo, cveData, fsDevices, aiPaths, netDevices) {
   window.__lastTopo = topo;          // so the AI-analysis button can find the current topo
   netDevices = netDevices || window.__netDevices || [];
@@ -2292,8 +2397,11 @@ function renderTopology(topo, cveData, fsDevices, aiPaths, netDevices) {
     elements.push({ data: { id: 'e-gw-' + nid, source: gateway ? 'router' : 'current', target: nid, etype: 'lan' } });
   }
 
-  // Discovered LAN devices not in the ARP table (the agent saw more than the host)
-  for (const nd of netDevices) {
+  // Discovered LAN devices not in the ARP table (the agent saw more than the host).
+  // The Attack Map shows a NOTABLE subset of the full device list so a crowded
+  // network doesn't lag cytoscape — devices with open ports or routers, capped.
+  // (netByIp above still indexes ALL devices so neighbours/gateway stay enriched.)
+  for (const nd of _notableNetDevices(netDevices, 50)) {
     if (!nd.ip || seenIps.has(nd.ip)) continue;
     seenIps.add(nd.ip);
     const did = 'd-' + nd.ip.replace(/[:.]/g, '_');

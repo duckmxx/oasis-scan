@@ -87,6 +87,16 @@ class App(tk.Tk):
         self._center(520, 640)
         self._switch(LoginFrame)
 
+    def destroy(self):
+        # Kill any in-flight nmap scans before tearing down the window so nothing
+        # is left sweeping the network as an orphan. Covers both close paths
+        # (window-manager X and the in-app ✕ button, which both reach here).
+        try:
+            _nd.cancel_scans()
+        except Exception:
+            pass
+        super().destroy()
+
     def _center(self, w: int, h: int):
         sw = self.winfo_screenwidth()
         sh = self.winfo_screenheight()
@@ -845,11 +855,16 @@ class Entry(tk.Frame):
         self._e   = tk.Entry(
             self, textvariable=self._var,
             bg=CARD, fg=TMUT, insertbackground=ACCENT,
+            selectbackground=ACCENT, selectforeground=BG,
             relief="flat", font=(FONT, 11), bd=10, show=show or "")
         self._e.pack(fill="x")
         # Accent the hairline border on focus for a refined input feel.
         self._e.bind("<FocusIn>",  self._focus_in, add="+")
         self._e.bind("<FocusOut>", self._focus_out, add="+")
+        # Ctrl+A / Cmd+A → select all. Tk's default Ctrl+A is "go to line start",
+        # which is why users couldn't select-and-replace what they'd typed.
+        for seq in ("<Control-a>", "<Control-A>", "<Command-a>", "<Command-A>"):
+            self._e.bind(seq, self._select_all)
         if placeholder and not show:
             self._e.insert(0, placeholder)
             self._e.bind("<FocusIn>",  self._in)
@@ -875,6 +890,14 @@ class Entry(tk.Frame):
     def _key(self, _):
         if self._e.cget("fg") == TMUT:
             self._e.config(fg=TEXT)
+
+    def _select_all(self, _):
+        # Don't select the greyed-out placeholder text.
+        if self._e.cget("fg") == TMUT:
+            return "break"
+        self._e.select_range(0, "end")
+        self._e.icursor("end")
+        return "break"
 
     def get(self) -> str:
         v = self._var.get()
