@@ -2097,26 +2097,14 @@ function renderTopology(topo, cveData, fsDevices, aiPaths) {
     elements.push({ data: { id: 'e-gw-' + fid, source: gateway ? 'router' : 'internet', target: fid, etype: 'lan' } });
   }
 
-  // Attack path edges — AI-specified vectors if available, otherwise CVE-based heuristic
-  if (aiPaths) {
-    const defs = _attackEdgeDefs(_attackPaths(aiPaths), topo, neighbors);
-    for (const def of defs) {
-      const okSrc = elements.some(e => e.data?.id === def.data.source);
-      const okTgt = elements.some(e => e.data?.id === def.data.target);
-      if (okSrc && okTgt) elements.push(def);
-    }
-  } else if (hasNetworkCVEs) {
-    // Fallback: draw entry from internet + pivot to all visible neighbors
-    elements.push({
-      data: { id: 'atk-entry', source: 'internet', target: 'current', etype: 'attack' },
-      classes: 'attack-path',
-    });
-    for (const nid of neighborIds) {
-      elements.push({
-        data: { id: 'atk-pivot-' + nid, source: 'current', target: nid, etype: 'pivot' },
-        classes: 'attack-pivot',
-      });
-    }
+  // Attack web: deterministic CVE edges (one per CVE → host) + lateral movement +
+  // secondary entry points. AI-specified vectors (if any) are layered on top.
+  const webDefs = _cveAttackEdges(topo, cveData, neighbors, fsDevices);
+  if (aiPaths) webDefs.push(..._attackEdgeDefs(_attackPaths(aiPaths), topo, neighbors));
+  for (const def of webDefs) {
+    const okSrc = elements.some(e => e.data?.id === def.data.source);
+    const okTgt = elements.some(e => e.data?.id === def.data.target);
+    if (okSrc && okTgt) elements.push(def);
   }
 
   const container = document.getElementById('topology-cy');
@@ -2132,13 +2120,16 @@ function renderTopology(topo, cveData, fsDevices, aiPaths) {
     elements:  elements,
     style:     _topoStyle(),
     layout: {
-      name:              'breadthfirst',
-      directed:          true,
-      roots:             ['#internet'],
-      padding:           48,
-      spacingFactor:     1.75,
-      animate:           true,
-      animationDuration: 500,
+      name:              'cose',          // force-directed → organic web, not a line
+      animate:            true,
+      animationDuration:  700,
+      nodeRepulsion:      9000,
+      idealEdgeLength:    110,
+      edgeElasticity:     120,
+      gravity:            0.35,
+      nestingFactor:      1.1,
+      padding:            40,
+      randomize:          false,
     },
     userZoomingEnabled:   true,
     userPanningEnabled:   true,
@@ -2394,6 +2385,56 @@ function _attackEdgeDefs(paths, topo, neighbors) {
   return defs;
 }
 
+// Deterministic kill-web: one attack edge per network-relevant CVE converging on
+// the host (multiple CVEs → same target), plus lateral movement and secondary
+// entry points. Guarantees a web regardless of what the LLM returns.
+function _cveAttackEdges(topo, cveData, neighbors, fsDevices) {
+  const defs = [];
+  const top = (cveData?.cves || [])
+    .filter(c => ['critical', 'high'].includes(c.severity))
+    .sort((a, b) => (Number(b.cvss) || 0) - (Number(a.cvss) || 0))
+    .slice(0, 8);
+
+  // Each CVE is its own attack edge from the internet onto this host
+  top.forEach((c, i) => {
+    const idx = i % _ATTACK_COLORS.length;
+    defs.push({
+      data: { id: `cveatk-${i}`, source: 'internet', target: 'current', etype: 'attack',
+              pathIndex: idx, vector: c.id, technique: cveImpactLabel(c),
+              cves: c.id, cveLabel: c.id },
+      classes: `attack-path attack-path-${idx}`,
+    });
+  });
+
+  // Lateral movement: a compromised host pivots to every visible neighbour
+  (neighbors || []).forEach((n, j) => {
+    if (!n.ip) return;
+    const idx = j % _ATTACK_COLORS.length;
+    defs.push({
+      data: { id: `cvepivot-${j}`, source: 'current', target: 'n-' + n.ip.replace(/[:.]/g, '_'),
+              etype: 'pivot', pathIndex: idx, vector: 'Lateral movement',
+              technique: 'Lateral movement', cves: '', cveLabel: '' },
+      classes: `attack-pivot attack-pivot-${idx}`,
+    });
+  });
+
+  // Secondary entry points: previously-scanned devices that are themselves risky
+  (fsDevices || []).forEach((d, k) => {
+    if (!d.hostname || d.hostname === topo.hostname) return;
+    const n = (d.critical ?? 0) + (d.high ?? 0);
+    if (n === 0) return;
+    const idx = (k + 1) % _ATTACK_COLORS.length;
+    defs.push({
+      data: { id: `cveentry2-${k}`, source: 'internet', target: 'fs-' + d.hostname.replace(/[^a-zA-Z0-9]/g, '_'),
+              etype: 'attack', pathIndex: idx, vector: d.hostname,
+              technique: `${n} CVEs`, cves: '', cveLabel: `${n} CVE${n !== 1 ? 's' : ''}` },
+      classes: `attack-path attack-path-${idx}`,
+    });
+  });
+
+  return defs;
+}
+
 function showTopoEdgeInfo(d) {
   const panel = document.getElementById('topo-node-info');
   if (!panel || (d.etype !== 'attack' && d.etype !== 'pivot')) return;
@@ -2411,22 +2452,8 @@ function showTopoEdgeInfo(d) {
 }
 
 function _renderAttackNarrativeResult(narrative, aiPaths, topo, subline, steps) {
-  // Re-render graph with AI-specified attack vectors (multiple, CVE-annotated)
-  if (aiPaths && window._topo_cy) {
-    const cy        = window._topo_cy;
-    const neighbors = (topo.neighbors || []).filter(n => n.ip && n.ip !== topo.gateway);
-    cy.elements('.attack-path, .attack-pivot').remove();
-    const defs = _attackEdgeDefs(_attackPaths(aiPaths), topo, neighbors);
-    for (const def of defs) {
-      if (cy.getElementById(def.data.source).length && cy.getElementById(def.data.target).length) {
-        cy.add(def);
-      }
-    }
-    cy.style(_topoStyle());
-    cy.removeListener('tap', 'edge');
-    cy.on('tap', 'edge', evt => showTopoEdgeInfo(evt.target.data()));
-  }
-
+  // The kill-web edges are drawn deterministically in renderTopology — here we
+  // only render the AI narrative text, with clickable CVE links.
   const linkifyCVE = s => s.replace(/\b(CVE-\d{4}-\d{4,7}|ASA-\d{4}-\d+)\b/g,
     m => `<a class="cve-link" onclick="window.__gotoCVE('${m}')">${m}</a>`);
   const lines = narrative.split('\n').filter(l => l.trim());
@@ -2435,10 +2462,10 @@ function _renderAttackNarrativeResult(narrative, aiPaths, topo, subline, steps) 
     : `<p class="attack-step" style="color:var(--text-secondary)">No narrative returned.</p>`;
 
   if (subline) {
-    const n = _attackPaths(aiPaths).length;
-    subline.textContent = n > 1
-      ? `AI-generated · ${n} attack vectors · click an edge to see the CVEs it exploits`
-      : 'AI-generated · based on live CVE data + network topology';
+    const edges = window._topo_cy ? window._topo_cy.edges('.attack-path').length : 0;
+    subline.textContent = edges > 0
+      ? `AI analysis · ${edges} CVE attack path${edges !== 1 ? 's' : ''} on the map · click any edge for its CVE`
+      : 'AI analysis · based on live CVE data + network topology';
   }
 }
 
