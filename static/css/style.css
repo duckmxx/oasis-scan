@@ -1505,6 +1505,39 @@ ul { list-style: none; }
   display: none;
 }
 
+/* Rich node-detail panel (IP / MAC / vendor / OS / open ports on node click) */
+.topo-node-head { margin-bottom: 6px; }
+.topo-kv-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 4px 18px;
+  margin-top: 4px;
+}
+.topo-kv { display: flex; gap: 8px; align-items: baseline; min-width: 0; }
+.topo-kv-label {
+  color: var(--text-muted);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  min-width: 58px;
+  flex: 0 0 auto;
+}
+.topo-kv-value {
+  color: var(--text-primary);
+  font-size: 11px;
+  word-break: break-word;
+  min-width: 0;
+}
+.topo-ports { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 5px; }
+.topo-port-chip {
+  font-size: 10px;
+  padding: 1px 7px;
+  border-radius: 4px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  color: var(--accent);
+}
+
 .topo-legend-inline {
   display: flex;
   align-items: center;
@@ -2686,3 +2719,36 @@ ul { list-style: none; }
 .topo-filter:hover { color: var(--text-secondary); border-color: var(--border-accent); }
 .topo-filter.active { color: var(--accent); background: var(--accent-glow); border-color: var(--accent-dim); }
 .topo-filter-div { width: 1px; height: 18px; background: var(--border); margin: 0 4px; }
+
+/* ═════════════════════════════════════════════════════════════════════
+   System Audit — elevated prominence (it's a headline signal, make it read so)
+   ═════════════════════════════════════════════════════════════════════ */
+.integrity-banner {
+  padding: 24px 28px; gap: 20px;
+  background: linear-gradient(135deg, var(--bg-card), var(--bg-panel));
+}
+.integrity-banner-icon {
+  width: 58px; height: 58px; font-size: 30px;
+  border-radius: var(--radius-md); border: 1px solid var(--border);
+}
+.integrity-banner-title { font-size: 18px; font-weight: 700; letter-spacing: -0.015em; }
+.integrity-banner-sub   { font-size: 13px; }
+.integrity-banner-ok {
+  border-color: rgba(39,201,63,0.45);
+  background: linear-gradient(135deg, rgba(39,201,63,0.10), rgba(39,201,63,0.02));
+}
+.integrity-banner-ok .integrity-banner-icon { background: rgba(39,201,63,0.12); border-color: rgba(39,201,63,0.4); }
+/* Issues found → urgent red, not a soft amber */
+.integrity-banner-warn {
+  border-color: rgba(255,56,96,0.5);
+  background: linear-gradient(135deg, rgba(255,56,96,0.12), rgba(255,56,96,0.02));
+}
+.integrity-banner-warn .integrity-banner-icon { background: rgba(255,56,96,0.14); border-color: rgba(255,56,96,0.45); color: var(--sev-critical); }
+.integrity-banner-warn .integrity-banner-title { color: var(--sev-critical); }
+
+/* Overview "Security Posture" — accent edge so it reads as a primary signal */
+.posture-summary { border-left: 3px solid var(--accent-dim); padding-left: 15px; }
+.posture-summary.posture-ok   { border-left-color: var(--sev-low); }
+.posture-summary.posture-warn { border-left-color: var(--sev-critical); }
+.posture-icon  { width: 48px; height: 48px; font-size: 24px; }
+.posture-title { font-size: 15px; }

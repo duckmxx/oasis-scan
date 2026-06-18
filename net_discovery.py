@@ -14,6 +14,7 @@ import json
 import re
 import shutil
 import subprocess
+import threading
 import urllib.request
 import urllib.error
 from datetime import datetime, timezone
@@ -133,17 +134,70 @@ def _arp_table() -> dict:
 
 # ── nmap host discovery ──────────────────────────────────────────────────────
 
-def _nmap_hosts(subnet: str) -> list:
+def _emit(progress, msg: str):
+    """Safely forward a live status line to an optional progress callback."""
+    if progress:
+        try:
+            progress(msg)
+        except Exception:  # pragma: no cover - never let UI callbacks break a scan
+            pass
+
+
+def _stream(cmd, on_line, timeout=240):
+    """Run a command, invoking on_line(line) for each stdout line as it arrives.
+
+    Returns the full captured stdout. Streaming lets the GUI show live progress
+    of what nmap is currently probing instead of blocking until completion.
+    Never raises — returns whatever was captured before any error/timeout.
+    """
+    lines: list = []
+    try:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                                stderr=subprocess.DEVNULL, text=True, bufsize=1)
+    except FileNotFoundError:
+        return ""
+    except Exception:  # pragma: no cover - defensive
+        return ""
+
+    def _kill_after():
+        try:
+            proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+
+    threading.Thread(target=_kill_after, daemon=True).start()
+    try:
+        for line in proc.stdout:  # type: ignore[union-attr]
+            line = line.rstrip("\n")
+            lines.append(line)
+            if on_line:
+                try:
+                    on_line(line)
+                except Exception:  # pragma: no cover
+                    pass
+    except Exception:  # pragma: no cover
+        pass
+    finally:
+        try:
+            proc.stdout.close()  # type: ignore[union-attr]
+        except Exception:
+            pass
+        try:
+            proc.wait(timeout=5)
+        except Exception:
+            pass
+    return "\n".join(lines)
+
+
+def _nmap_hosts(subnet: str, progress=None) -> list:
     """Run `nmap -sn` and parse hosts into [{ip, mac, hostname, vendor}].
 
-    MAC + vendor lines ("MAC Address: AA:BB:.. (Vendor)") only appear when nmap
-    runs with privileges on the local LAN, so they're treated as optional.
+    Streams nmap output so the desktop GUI can show, live, which host is being
+    probed. MAC + vendor lines ("MAC Address: AA:BB:.. (Vendor)") only appear
+    when nmap runs with privileges on the local LAN, so they're treated as
+    optional.
     """
     if not shutil.which("nmap") or not subnet:
-        return []
-
-    out, err, rc = _run(["nmap", "-sn", "-T4", subnet], timeout=180)
-    if rc not in (0, 1) or not out:
         return []
 
     hosts: list = []
@@ -153,7 +207,7 @@ def _nmap_hosts(subnet: str) -> list:
         if current.get("ip"):
             hosts.append(dict(current))
 
-    for line in out.splitlines():
+    def _on_line(line: str):
         if line.startswith("Nmap scan report for"):
             _flush()
             current.clear()
@@ -167,6 +221,10 @@ def _nmap_hosts(subnet: str) -> list:
                 current["ip"] = rest
             current["mac"] = ""
             current["vendor"] = ""
+            label = current["ip"]
+            if current["hostname"]:
+                label = f"{current['hostname']} ({current['ip']})"
+            _emit(progress, f"Host up · {label}")
         elif "MAC Address:" in line:
             mac = _norm_mac(line)
             if mac:
@@ -174,8 +232,79 @@ def _nmap_hosts(subnet: str) -> list:
             vm = re.search(r"\(([^)]+)\)\s*$", line)
             if vm:
                 current["vendor"] = vm.group(1).strip()
+
+    # --stats-every prints "About N% done" lines we surface as progress.
+    _stream(["nmap", "-sn", "-T4", "--stats-every", "2s", subnet],
+            _on_line, timeout=240)
     _flush()
     return hosts
+
+
+# ── nmap per-host port / service / OS enrichment ─────────────────────────────
+
+# Friendly names for the most common ports, so a device card reads
+# "22/tcp ssh, 80/tcp http" without needing nmap's service-detection probes.
+_PORT_NAMES = {
+    21: "ftp", 22: "ssh", 23: "telnet", 25: "smtp", 53: "dns",
+    80: "http", 110: "pop3", 135: "msrpc", 139: "netbios", 143: "imap",
+    443: "https", 445: "smb", 465: "smtps", 514: "syslog", 515: "printer",
+    548: "afp", 554: "rtsp", 587: "submission", 631: "ipp", 993: "imaps",
+    995: "pop3s", 1080: "socks", 1433: "mssql", 1723: "pptp", 1883: "mqtt",
+    1900: "upnp", 2049: "nfs", 3000: "http-alt", 3306: "mysql",
+    3389: "rdp", 5000: "upnp", 5060: "sip", 5353: "mdns", 5432: "postgres",
+    5555: "adb", 5900: "vnc", 6379: "redis", 8000: "http-alt",
+    8008: "http", 8080: "http-proxy", 8443: "https-alt", 8883: "mqtts",
+    9000: "http-alt", 9100: "jetdirect", 32400: "plex",
+}
+
+
+def _nmap_enrich(ip: str, progress=None) -> dict:
+    """Best-effort port / service / OS probe of a single host.
+
+    Returns {open_ports: [...], services: [...], os_details: str}. Uses a fast
+    top-ports TCP-connect scan (no root needed) and adds OS fingerprinting when
+    nmap can run privileged. Always returns a dict; never raises.
+    """
+    result = {"open_ports": [], "services": [], "os_details": ""}
+    if not shutil.which("nmap") or not ip:
+        return result
+
+    _emit(progress, f"Probing services on {ip}…")
+    # -F = top 100 ports, -T4 fast, --version-light for light service banners.
+    # -O (OS detect) only works as root; harmless to request — nmap warns and
+    # skips it unprivileged, and the connect scan still returns ports.
+    out = _stream(
+        ["nmap", "-F", "-T4", "--version-light", "-O", "--osscan-guess", ip],
+        None, timeout=120)
+    if not out:
+        # Retry without -O in case the privileged combo aborted early.
+        out = _stream(["nmap", "-F", "-T4", ip], None, timeout=90)
+
+    for line in out.splitlines():
+        # "22/tcp   open  ssh     OpenSSH 9.6"
+        pm = re.match(r"^(\d+)/(tcp|udp)\s+open\s+(\S+)?\s*(.*)$", line.strip())
+        if pm:
+            port = int(pm.group(1))
+            proto = pm.group(2)
+            svc = (pm.group(3) or _PORT_NAMES.get(port, "")).strip()
+            banner = pm.group(4).strip()
+            label = f"{port}/{proto}"
+            if svc and svc not in ("open", "?"):
+                label += f" {svc}"
+            result["open_ports"].append(label)
+            if svc and svc not in ("open", "?"):
+                result["services"].append(f"{svc} {banner}".strip())
+        # "OS details: Linux 5.4 - 5.15" / "Running: Linux 5.X"
+        elif line.startswith("OS details:"):
+            result["os_details"] = line.split(":", 1)[1].strip()
+        elif line.startswith("Running:") and not result["os_details"]:
+            result["os_details"] = line.split(":", 1)[1].strip()
+        elif line.startswith("Aggressive OS guesses:") and not result["os_details"]:
+            result["os_details"] = line.split(":", 1)[1].strip().split(",")[0]
+
+    if result["open_ports"]:
+        _emit(progress, f"{ip} · {len(result['open_ports'])} open port(s)")
+    return result
 
 
 # ── OUI vendor lookup (macvendors.com) ───────────────────────────────────────
@@ -292,22 +421,28 @@ def guess_os(ip: str, mac: str = "", vendor: str = "", hostname: str = "") -> st
 
 # ── Top-level discovery ──────────────────────────────────────────────────────
 
-def discover(subnet: str | None = None) -> list:
+def discover(subnet: str | None = None, progress=None, enrich: bool = True) -> list:
     """Discover devices on the local network.
 
     Returns a list of dicts:
-      {ip, mac, vendor, device_type, os_guess, hostname, source,
-       first_seen, last_seen}
+      {ip, mac, vendor, device_type, os_guess, os_details, open_ports,
+       services, hostname, source, first_seen, last_seen}
 
     Merges nmap host-discovery with the ARP/neighbor table, enriches each entry
-    with vendor/device-type/OS guesses, and de-duplicates by MAC (falling back
-    to IP when the MAC is unknown). Always returns a list — never raises.
+    with vendor/device-type/OS guesses and (when enrich=True) a per-host
+    port/service/OS probe, then de-duplicates by MAC (falling back to IP when the
+    MAC is unknown). `progress` is an optional callable(str) that receives live
+    status lines so a GUI can show what is currently being scanned. Always
+    returns a list — never raises.
     """
     if not subnet:
+        _emit(progress, "Detecting local subnet…")
         subnet = detect_subnet()
 
+    _emit(progress, "Reading ARP / neighbor table…")
     arp = _arp_table()
-    nmap_hosts = _nmap_hosts(subnet) if subnet else []
+    _emit(progress, f"Sweeping {subnet or 'local network'} for live hosts…")
+    nmap_hosts = _nmap_hosts(subnet, progress) if subnet else []
 
     # Merge by IP first so ARP hostnames/MACs and nmap MACs reinforce each other.
     by_ip: dict = {}
@@ -332,21 +467,35 @@ def discover(subnet: str | None = None) -> list:
 
     now = _now_iso()
     devices: list = []
-    for ip, rec in by_ip.items():
+    total = len(by_ip)
+    for idx, (ip, rec) in enumerate(by_ip.items(), 1):
         mac = rec["mac"]
         vendor = rec["vendor"] or (mac_vendor(mac) if mac else "")
         hostname = rec["hostname"]
-        devices.append({
+        dev = {
             "ip": ip,
             "mac": mac,
             "vendor": vendor,
             "device_type": guess_device_type(vendor, hostname),
             "os_guess": guess_os(ip, mac, vendor, hostname),
+            "os_details": "",
+            "open_ports": [],
+            "services": [],
             "hostname": hostname,
-            "source": "nmap",
+            "source": "nmap" if mac or vendor else "arp",
             "first_seen": now,
             "last_seen": now,
-        })
+        }
+        if enrich:
+            _emit(progress, f"[{idx}/{total}] Fingerprinting {ip}…")
+            extra = _nmap_enrich(ip, progress)
+            dev["open_ports"] = extra["open_ports"]
+            dev["services"] = extra["services"]
+            dev["os_details"] = extra["os_details"]
+            # A concrete nmap OS fingerprint beats the TTL/vendor heuristic.
+            if extra["os_details"]:
+                dev["os_guess"] = extra["os_details"]
+        devices.append(dev)
 
     # Dedup by MAC (or ip_<ip> when MAC unknown); keep the richest record.
     deduped: dict = {}
@@ -354,7 +503,10 @@ def discover(subnet: str | None = None) -> list:
         key = d["mac"] or f"ip_{d['ip']}"
         if key in deduped:
             cur = deduped[key]
-            for f in ("vendor", "hostname"):
+            for f in ("vendor", "hostname", "os_details"):
+                if not cur.get(f) and d.get(f):
+                    cur[f] = d[f]
+            for f in ("open_ports", "services"):
                 if not cur.get(f) and d.get(f):
                     cur[f] = d[f]
         else:
@@ -377,10 +529,19 @@ def _sanitize_doc_id(device: dict) -> str:
 
 
 def _to_fields(device: dict) -> dict:
-    """Map a device dict to Firestore typed fields (string values)."""
-    keys = ("ip", "mac", "vendor", "device_type", "os_guess",
-            "hostname", "source", "first_seen", "last_seen")
-    return {k: {"stringValue": str(device.get(k, "") or "")} for k in keys}
+    """Map a device dict to Firestore typed fields.
+
+    Strings stay stringValue; open_ports/services become arrayValues so the web
+    dashboard reads them back as native arrays.
+    """
+    str_keys = ("ip", "mac", "vendor", "device_type", "os_guess", "os_details",
+                "hostname", "source", "first_seen", "last_seen")
+    fields = {k: {"stringValue": str(device.get(k, "") or "")} for k in str_keys}
+    for k in ("open_ports", "services"):
+        vals = device.get(k) or []
+        fields[k] = {"arrayValue": {"values": [
+            {"stringValue": str(v)} for v in vals if v]}}
+    return fields
 
 
 def _device_url(uid: str, doc_id: str) -> str:
@@ -454,8 +615,9 @@ def save_devices(id_token: str, uid: str, devices: list) -> dict:
     return summary
 
 
-def discover_and_save(id_token: str, uid: str, subnet: str | None = None) -> tuple:
+def discover_and_save(id_token: str, uid: str, subnet: str | None = None,
+                      progress=None) -> tuple:
     """Convenience: discover then persist. Returns (devices, summary)."""
-    devices = discover(subnet)
+    devices = discover(subnet, progress=progress)
     summary = save_devices(id_token, uid, devices)
     return devices, summary

@@ -312,29 +312,38 @@ class ScanFrame(tk.Frame):
         time.sleep(0.08)
 
         self._step = 7          # syncing
-        _sc.firestore_save(token, uid, report)
+        ok, err = _sc.firestore_save(token, uid, report)
 
         self._done = True
-        self.after(0, lambda: self.master._switch(ResultFrame, report, self._email))
+        self.after(0, lambda: self.master._switch(
+            ResultFrame, report, self._email, ok, err))
 
 
 # ── Results frame ─────────────────────────────────────────────────────────────
 
 class ResultFrame(tk.Frame):
-    def __init__(self, master: App, report: dict, email: str):
+    def __init__(self, master: App, report: dict, email: str,
+                 synced: bool = True, sync_err: str | None = None):
         super().__init__(master, bg=BG)
-        self._r     = report
-        self._email = email
+        self._r       = report
+        self._email   = email
+        self._synced  = synced
+        self._sync_err = sync_err
         self._remaining = SCAN_INTERVAL_SEC
         self._build()
         self._tick_countdown()
 
     def _build(self):
         bar = _topbar(self, subtitle=self._email)
-        # Add "synced" chip to the existing bar's inner frame
+        # Add a sync chip to the existing bar's inner frame — reflects the real
+        # Firestore write result rather than always claiming success.
         inner = bar.winfo_children()[0]   # the inner Frame
-        tk.Label(inner, text="✓ Synced",
-                 font=("Inter", 9), bg=PANEL, fg=OK).pack(side="right", padx=(0, 8))
+        if self._synced:
+            tk.Label(inner, text="✓ Synced to cloud",
+                     font=("Inter", 9), bg=PANEL, fg=OK).pack(side="right", padx=(0, 8))
+        else:
+            tk.Label(inner, text="⚠ Sync failed",
+                     font=("Inter", 9), bg=PANEL, fg=ERR).pack(side="right", padx=(0, 8))
 
         # Scrollable body
         wrap = tk.Frame(self, bg=BG)
@@ -480,7 +489,7 @@ class NetworkFrame(tk.Frame):
     def _build_scanning(self):
         _topbar(self, subtitle="Network discovery")
         center = tk.Frame(self, bg=BG)
-        center.place(relx=0.5, rely=0.5, anchor="center")
+        center.place(relx=0.5, rely=0.42, anchor="center")
 
         self._cv = tk.Canvas(center, width=96, height=96,
                              bg=BG, highlightthickness=0)
@@ -489,8 +498,20 @@ class NetworkFrame(tk.Frame):
                  font=F_H1, bg=BG, fg=TEXT, pady=20).pack()
         self._step_lbl = tk.Label(
             center, text="Detecting subnet…", font=(MONO, 9),
-            bg=BG, fg=TMUT, wraplength=360)
+            bg=BG, fg=ACCENT, wraplength=400)
         self._step_lbl.pack()
+
+        # Live scan log — a small terminal of the most recent nmap activity.
+        logwrap = tk.Frame(center, bg=PANEL,
+                           highlightbackground=BORDER, highlightthickness=1)
+        logwrap.pack(pady=(22, 0), fill="x")
+        tk.Label(logwrap, text="LIVE ACTIVITY", font=F_SECTION,
+                 bg=PANEL, fg=TMUT, anchor="w").pack(fill="x", padx=12, pady=(8, 2))
+        self._log_lbl = tk.Label(
+            logwrap, text="", font=(MONO, 8), bg=PANEL, fg=TSEC,
+            justify="left", anchor="nw", width=52, height=7)
+        self._log_lbl.pack(fill="x", padx=12, pady=(0, 10))
+        self._log_lines: list = []
 
     def _spin(self):
         if not self._running or not self.winfo_exists() or not self._cv.winfo_exists():
@@ -513,18 +534,31 @@ class NetworkFrame(tk.Frame):
         if self.winfo_exists() and self._step_lbl.winfo_exists():
             self._step_lbl.config(text=text)
 
+    def _append_log(self, text: str):
+        """Push a line into the live activity log (keep the last 7)."""
+        if not (self.winfo_exists() and self._log_lbl.winfo_exists()):
+            return
+        self._log_lines.append(text)
+        self._log_lines = self._log_lines[-7:]
+        self._log_lbl.config(text="\n".join(self._log_lines))
+
+    def _progress(self, msg: str):
+        """Called from worker/nmap threads — marshal updates onto the UI thread."""
+        if not self.winfo_exists():
+            return
+        self.after(0, lambda: (self._set_step(msg), self._append_log(msg)))
+
     # ── Worker thread ──────────────────────────────────────────────────────────
 
     def _run(self):
         try:
-            self.after(0, lambda: self._set_step("Detecting subnet…"))
+            self._progress("Detecting subnet…")
             subnet = _nd.detect_subnet()
-            self.after(0, lambda: self._set_step(
-                f"Discovering hosts on {subnet or 'local network'}…"))
-            devices = _nd.discover(subnet)
+            self._progress(f"Discovering hosts on {subnet or 'local network'}…")
+            devices = _nd.discover(subnet, progress=self._progress)
             self._devices = devices
 
-            self.after(0, lambda: self._set_step("Syncing to cloud…"))
+            self._progress(f"Syncing {len(devices)} device(s) to cloud…")
             token, uid = self.master._creds
             self._summary = _nd.save_devices(token, uid, devices)
         except Exception as e:  # never crash the GUI
@@ -643,7 +677,10 @@ class NetworkFrame(tk.Frame):
 
         _kv("MAC", d.get("mac"))
         _kv("Vendor", d.get("vendor"))
-        _kv("OS", d.get("os_guess"))
+        _kv("OS", d.get("os_details") or d.get("os_guess"))
+        ports = d.get("open_ports") or []
+        if ports:
+            _kv("Ports", ", ".join(ports[:6]) + ("…" if len(ports) > 6 else ""))
 
 
 # ── Shared top-bar ────────────────────────────────────────────────────────────

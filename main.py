@@ -12,7 +12,7 @@ try:
     _TTS_OK = True
 except ImportError:
     _TTS_OK = False
-from scanner import scan as run_scan, get_nmap_scan
+from scanner import scan as run_scan
 from cve_lookup import lookup_cves
 from integrity_check import run_integrity
 from patchability import assess_patchability
@@ -204,19 +204,6 @@ def api_ai_chat():
         mimetype="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
-
-
-@app.route("/api/nmap_scan", methods=["POST"])
-def api_nmap_scan():
-    try:
-        data   = flask.request.get_json(force=True) or {}
-        subnet = data.get("subnet", "").strip()
-        if not subnet:
-            return flask.jsonify({"ok": False, "error": "No subnet provided"}), 400
-        result = get_nmap_scan(subnet)
-        return flask.jsonify({"ok": True, **result})
-    except Exception as e:
-        return flask.jsonify({"ok": False, "error": str(e)}), 500
 
 
 async def _tts_generate(text: str) -> bytes:

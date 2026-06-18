@@ -597,7 +597,7 @@
         <div class="panel-header">
           <div class="panel-title"><span class="icon">⊟</span> Devices</div>
           <div style="display:flex;align-items:center;gap:10px">
-            <button class="btn btn-ghost btn-sm" id="nmap-scan-btn" onclick="window.runNmapScan?.()">⬡ Nmap Scan</button>
+            <button class="btn btn-ghost btn-sm" id="devices-refresh-btn" onclick="window.__loadDiscovered?.()">↺ Refresh</button>
             <span class="text-muted" style="font-size:12px" id="devices-count">—</span>
           </div>
         </div>
@@ -984,9 +984,10 @@ curl -O https://scanoasis.tech/download/gui.py</code></pre>
 
       // Load scan history, devices, and tags from Firestore
       loadScanHistory(user.uid);
-      loadDevices(user.uid);
+      // Render scanned systems, then overlay LAN devices discovered by the agent.
+      loadDevices(user.uid).then(() => window.__loadDiscovered?.());
       loadDeviceTags(user.uid);
-      window.__loadDevices = () => loadDevices(user.uid);
+      window.__loadDevices = () => loadDevices(user.uid).then(() => window.__loadDiscovered?.());
 
       // Restore last scan's CVE + topology data, then auto-run a fresh scan
       window.__loadLastScanData(user.uid).then(data => {
@@ -994,8 +995,9 @@ curl -O https://scanoasis.tech/download/gui.py</code></pre>
         if (data && typeof window.__onSavedDataReady === 'function') {
           window.__onSavedDataReady(data);
         }
-        // Auto-scan once on page load for fresh results
-        window.startScan?.();
+        // Auto-scan once on page load — in the background so cached results show
+        // instantly and the dashboard doesn't sit behind a blocking overlay.
+        window.startScan?.({ background: true });
       });
     });
 
@@ -1205,6 +1207,44 @@ curl -O https://scanoasis.tech/download/gui.py</code></pre>
         return [...map.values()];
       } catch (e) {
         console.error('getFirestoreDevices failed', e);
+        return [];
+      }
+    };
+
+    // Devices discovered on the LAN by the desktop agent (MAC / vendor / OS /
+    // open ports). Stored under users/{uid}/network_devices, keyed by MAC/IP.
+    window.__getNetworkDevices = async function() {
+      const user = auth.currentUser;
+      if (!user) return [];
+      try {
+        const snap = await getDocs(collection(db, 'users', user.uid, 'network_devices'));
+        const out = [];
+        snap.forEach(doc => {
+          const d = doc.data();
+          out.push({
+            id:          doc.id,
+            ip:          d.ip          || '',
+            mac:         d.mac         || '',
+            vendor:      d.vendor      || '',
+            device_type: d.device_type || '',
+            os_guess:    d.os_guess    || '',
+            os_details:  d.os_details  || '',
+            hostname:    d.hostname    || '',
+            open_ports:  Array.isArray(d.open_ports) ? d.open_ports : [],
+            services:    Array.isArray(d.services)   ? d.services   : [],
+            first_seen:  d.first_seen  || '',
+            last_seen:   d.last_seen   || '',
+          });
+        });
+        // Sort numerically by IP for a stable, readable order.
+        out.sort((a, b) => {
+          const pa = a.ip.split('.').map(Number), pb = b.ip.split('.').map(Number);
+          for (let i = 0; i < 4; i++) if ((pa[i]||0) !== (pb[i]||0)) return (pa[i]||0) - (pb[i]||0);
+          return 0;
+        });
+        return out;
+      } catch (e) {
+        console.error('getNetworkDevices failed', e);
         return [];
       }
     };

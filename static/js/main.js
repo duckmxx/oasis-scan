@@ -138,8 +138,9 @@ document.querySelectorAll('.nav-item[data-section]').forEach(item => {
         if (topo) runTopologyFromSaved(topo, cvs);
       }
     }
-    if (target === 'section-devices' && window.__deviceCache) {
-      buildDeviceNetworkMap(Object.values(window.__deviceCache));
+    if (target === 'section-devices') {
+      if (window.__deviceCache) buildDeviceNetworkMap(Object.values(window.__deviceCache));
+      if (typeof window.__loadDiscovered === 'function') window.__loadDiscovered();
     }
     if (target === 'section-cves') {
       if (!_cveData && window.__savedData?.cves?.length > 0) {
@@ -240,21 +241,25 @@ function filterCVETable() {
 
 /* --- Scan --- */
 
-async function startScan() {
+async function startScan(opts = {}) {
   if (startScan._running) return;
   startScan._running = true;
   _dot       = document.getElementById('status-dot');
   _statusLbl = document.getElementById('status-label');
 
-  const overlay   = document.getElementById('scan-overlay');
+  // Background mode (initial auto-scan): no full-screen overlay, so cached data
+  // stays visible and the dashboard feels instant; the scan refreshes in place.
+  const background = opts.background === true;
+  const overlay   = background ? null : document.getElementById('scan-overlay');
   const stepLabel = document.getElementById('scan-step-label');
   const scanBtn   = document.getElementById('scan-btn');
 
   if (overlay)   overlay.style.display = 'flex';
   if (_dot)      _dot.className = 'status-dot scanning';
-  if (_statusLbl) _statusLbl.textContent = 'Scanning…';
+  if (_statusLbl) _statusLbl.textContent = background ? 'Refreshing…' : 'Scanning…';
   if (scanBtn)   scanBtn.disabled = true;
-  showToast('Running system scan…', 'loading', { duration: 4000 });
+  showToast(background ? 'Refreshing scan in background…' : 'Running system scan…',
+            'loading', { duration: 4000 });
 
   const steps = [
     'Collecting OS info…', 'Reading CPU & memory…', 'Scanning block devices…',
@@ -1609,99 +1614,157 @@ function sevColor(sev) {
 }
 
 /* =========================================================
-   NMAP NETWORK SCAN
+   DISCOVERED LAN DEVICES (synced from the desktop agent)
+   network_devices: ip · mac · vendor · OS · open ports
    ========================================================= */
 
-window.runNmapScan = async function() {
-  // Infer subnet from the last scan report's IP addresses, or ask user
-  let subnet = '';
-  if (_lastReport?.network?.addresses) {
-    for (const iface of _lastReport.network.addresses) {
-      if (iface.ifname?.startsWith('lo')) continue;
-      for (const addr of (iface.addr_info ?? [])) {
-        if (addr.family === 'inet' && addr.local && addr.prefixlen) {
-          // Build CIDR from IP + prefix
-          const parts = addr.local.split('.').map(Number);
-          const prefix = addr.prefixlen;
-          subnet = `${parts[0]}.${parts[1]}.${parts[2]}.0/${prefix}`;
-          break;
-        }
-      }
-      if (subnet) break;
-    }
-  }
-  if (!subnet) {
-    subnet = prompt('Enter subnet to scan (e.g. 192.168.1.0/24):');
-    if (!subnet) return;
-  }
+// Coarse icon per device type so the grid reads at a glance.
+function _discoveredIcon(t) {
+  const m = {
+    'Router/Gateway': '🛜', 'Apple device': '🍎', 'Raspberry Pi': '🍓',
+    'Printer': '🖨️', 'Android/Mobile': '📱', 'IoT': '💡', 'PC/Server': '🖥️',
+  };
+  return m[t] || '🔌';
+}
 
-  const btn = document.getElementById('nmap-scan-btn');
-  if (btn) { btn.disabled = true; btn.textContent = '⬡ Scanning…'; }
-
-  try {
-    const res  = await fetch('/api/nmap_scan', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ subnet }),
-    });
-    const data = await res.json();
-
-    if (!data.ok || !data.available) {
-      alert('Nmap scan failed: ' + (data.error || data.reason || 'unknown error'));
-      return;
-    }
-
-    _mergeNmapResults(data.hosts ?? []);
-  } catch (err) {
-    alert('Nmap scan error: ' + err.message);
-  } finally {
-    if (btn) { btn.disabled = false; btn.textContent = '⬡ Nmap Scan'; }
-  }
-};
-
-function _mergeNmapResults(hosts) {
+// Pull discovered LAN devices from Firestore and render them as cards in the
+// Devices grid, below the scanned systems. Also feeds the topology/attack web.
+window.__loadDiscovered = async function() {
+  if (typeof window.__getNetworkDevices !== 'function') return [];
   const grid  = document.getElementById('devices-grid');
   const count = document.getElementById('devices-count');
-  if (!grid || hosts.length === 0) return;
+  const btn   = document.getElementById('devices-refresh-btn');
+  if (btn) { btn.disabled = true; btn.textContent = '↺ Refreshing…'; }
 
-  // Remove old nmap placeholder cards
-  grid.querySelectorAll('.nmap-card').forEach(el => el.remove());
+  let devices = [];
+  try {
+    devices = await window.__getNetworkDevices();
+    window.__netDevices = devices;
 
-  let added = 0;
-  for (const h of hosts) {
-    const label    = h.hostname !== h.ip ? h.hostname : h.ip;
-    const sublabel = h.hostname !== h.ip ? h.ip : '';
-    const vendor   = h.vendor ? ` · ${escapeHtml(h.vendor)}` : '';
+    if (grid) {
+      // Replace any previously rendered discovered cards.
+      grid.querySelectorAll('.discovered-card').forEach(el => el.remove());
+      const empty = grid.querySelector('.empty-state');
 
-    // Skip if already in device cache
-    if (window.__deviceCache?.[h.hostname] || window.__deviceCache?.[h.ip]) continue;
+      const scannedHosts = new Set(Object.keys(window.__deviceCache || {}));
+      let added = 0;
+      for (const d of devices) {
+        // Skip a discovered host that's already represented as a full scan.
+        if (d.hostname && scannedHosts.has(d.hostname)) continue;
+        _renderDiscoveredCard(grid, d);
+        added++;
+      }
+      if (added > 0 && empty) empty.style.display = 'none';
 
-    const card = document.createElement('div');
-    card.className = 'device-card nmap-card';
-    card.innerHTML = `
-      <div class="device-card-header">
-        <div class="device-icon">🔍</div>
-        <div>
-          <div class="device-name">${escapeHtml(label)}</div>
-          <div class="device-os">${escapeHtml(sublabel)}${vendor}</div>
-        </div>
+      if (count) {
+        const scanned = grid.querySelectorAll('.device-card:not(.discovered-card)').length;
+        const total   = scanned + added;
+        count.textContent = `${total} device${total !== 1 ? 's' : ''} · ${added} on LAN`;
+      }
+    }
+
+    // Refresh the device map / attack web so the new hosts appear there too.
+    if (window.__deviceCache && typeof window.__buildDeviceNetworkMap === 'function') {
+      window.__buildDeviceNetworkMap(Object.values(window.__deviceCache));
+    }
+  } catch (e) {
+    console.error('loadDiscovered failed', e);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '↺ Refresh'; }
+  }
+  return devices;
+};
+
+function _renderDiscoveredCard(grid, d) {
+  const title    = d.hostname || d.ip || 'Unknown device';
+  const sub      = d.hostname && d.ip ? d.ip : (d.vendor || '');
+  const os       = d.os_details || d.os_guess || 'Unknown OS';
+  const portStr  = (d.open_ports || []).slice(0, 4).join(', ')
+                 + ((d.open_ports || []).length > 4 ? '…' : '');
+  const card = document.createElement('div');
+  card.className = 'device-card discovered-card';
+  card.style.cursor = 'pointer';
+  card.innerHTML = `
+    <div class="device-card-header">
+      <div class="device-icon">${_discoveredIcon(d.device_type)}</div>
+      <div style="min-width:0">
+        <div class="device-name">${escapeHtml(title)}</div>
+        <div class="device-os">${escapeHtml(sub)}</div>
       </div>
-      <div class="device-footer" style="padding-top:8px">
-        <span class="device-kernel">Discovered via nmap</span>
-        ${h.mac ? `<span class="device-last-scan mono" style="font-size:10px">${escapeHtml(h.mac)}</span>` : ''}
-      </div>`;
-    grid.appendChild(card);
-    added++;
-  }
-
-  if (count) {
-    const existing = parseInt(count.textContent) || 0;
-    const total    = existing + added;
-    count.textContent = `${total} device${total !== 1 ? 's' : ''}`;
-  }
-
-  if (added === 0) alert(`Nmap found ${hosts.length} host${hosts.length !== 1 ? 's' : ''} — all already registered.`);
+      <span class="badge" style="margin-left:auto;background:rgba(0,212,255,.12);color:var(--accent);border:1px solid rgba(0,212,255,.3)">LAN</span>
+    </div>
+    <div class="device-stats" style="margin-top:8px">
+      <div class="device-stat device-stat-cpu"><div class="device-stat-label">OS</div><div class="device-stat-value device-stat-value-wrap">${escapeHtml(os)}</div></div>
+      <div class="device-stat"><div class="device-stat-label">Type</div><div class="device-stat-value">${escapeHtml(d.device_type || 'Unknown')}</div></div>
+      <div class="device-stat"><div class="device-stat-label">Vendor</div><div class="device-stat-value">${escapeHtml(d.vendor || '—')}</div></div>
+      ${portStr ? `<div class="device-stat device-stat-cpu"><div class="device-stat-label">Open ports</div><div class="device-stat-value device-stat-value-wrap" style="font-size:11px">${escapeHtml(portStr)}</div></div>` : ''}
+    </div>
+    <div class="device-footer" style="padding-top:8px">
+      <span class="device-kernel">Discovered by desktop agent</span>
+      ${d.mac ? `<span class="device-last-scan mono" style="font-size:10px">${escapeHtml(d.mac)}</span>` : ''}
+    </div>`;
+  card.addEventListener('click', () => window.__openDiscoveredModal(d));
+  grid.appendChild(card);
 }
+
+// Rich detail modal for a discovered LAN device — reuses the device modal shell.
+window.__openDiscoveredModal = function(d) {
+  const modal = document.getElementById('device-modal');
+  const body  = document.getElementById('device-modal-body');
+  if (!modal || !body) return;
+
+  const title = d.hostname || d.ip || 'Unknown device';
+  const os    = d.os_details || d.os_guess || '—';
+  document.getElementById('modal-hostname').textContent = title;
+  document.getElementById('modal-os').textContent       = os;
+  const riskBadge = document.getElementById('modal-risk-badge');
+  if (riskBadge) { riskBadge.className = 'badge'; riskBadge.textContent = 'LAN'; riskBadge.style.display = ''; }
+
+  const fmt = ts => { try { return ts ? new Date(ts).toLocaleString() : '—'; } catch { return '—'; } };
+  const ports = d.open_ports || [];
+  const svcs  = d.services   || [];
+
+  const portsHtml = ports.length
+    ? `<div class="modal-section">
+        <div class="modal-section-title">Open ports — ${ports.length}</div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px">
+          ${ports.map(p => `<span class="badge" style="background:var(--bg-card);border:1px solid var(--border);font-family:var(--font-mono);font-size:11px">${escapeHtml(p)}</span>`).join('')}
+        </div>
+       </div>`
+    : `<div class="modal-section"><div class="text-muted" style="font-size:12px">No open ports detected (or host blocked the probe).</div></div>`;
+
+  const svcHtml = svcs.length
+    ? `<div class="modal-section">
+        <div class="modal-section-title">Services</div>
+        <ul style="margin:0;padding-left:18px;font-size:12px;color:var(--text-secondary)">
+          ${svcs.map(s => `<li>${escapeHtml(s)}</li>`).join('')}
+        </ul>
+       </div>`
+    : '';
+
+  body.innerHTML = `
+    <div class="modal-specs-row">
+      <div class="modal-spec"><div class="modal-spec-label">IP address</div><div class="modal-spec-value mono">${escapeHtml(d.ip || '—')}</div></div>
+      <div class="modal-spec"><div class="modal-spec-label">MAC</div><div class="modal-spec-value mono">${escapeHtml(d.mac || '—')}</div></div>
+      <div class="modal-spec"><div class="modal-spec-label">Vendor</div><div class="modal-spec-value">${escapeHtml(d.vendor || '—')}</div></div>
+      <div class="modal-spec"><div class="modal-spec-label">Type</div><div class="modal-spec-value">${escapeHtml(d.device_type || 'Unknown')}</div></div>
+      <div class="modal-spec"><div class="modal-spec-label">OS guess</div><div class="modal-spec-value">${escapeHtml(os)}</div></div>
+      <div class="modal-spec"><div class="modal-spec-label">Hostname</div><div class="modal-spec-value">${escapeHtml(d.hostname || '—')}</div></div>
+    </div>
+    <div class="modal-cve-summary">
+      <div class="modal-cve-badge"><div class="modal-cve-num" style="color:var(--accent)">${ports.length}</div><div class="modal-cve-lbl">open ports</div></div>
+      <div class="modal-cve-badge"><div class="modal-cve-num" style="color:var(--text-secondary)">${svcs.length}</div><div class="modal-cve-lbl">services</div></div>
+      <div style="margin-left:auto;font-size:11px;color:var(--text-muted);text-align:right">First seen<br>${escapeHtml(fmt(d.first_seen))}<br><span style="opacity:.7">Last ${escapeHtml(fmt(d.last_seen))}</span></div>
+    </div>
+    ${portsHtml}
+    ${svcHtml}
+    <div class="modal-section"><div class="text-muted" style="font-size:11px">Discovered on the local network by the Scan Oasis desktop agent. Run a full system scan on this host to see CVEs and patch guidance.</div></div>`;
+
+  const delBtn = document.getElementById('modal-delete-btn');
+  if (delBtn) delBtn.onclick = () => { modal.style.display = 'none'; };
+
+  modal.style.display = 'flex';
+};
 
 /* =========================================================
    DEVICES — modal + network map
@@ -1898,7 +1961,7 @@ window.__openDeviceModal = function(d) {
           window.__buildDeviceNetworkMap(Object.values(window.__deviceCache));
         }
         // Update device count badge
-        const remaining = document.querySelectorAll('#devices-grid .device-card:not(.nmap-card)').length;
+        const remaining = document.querySelectorAll('#devices-grid .device-card:not(.discovered-card)').length;
         const countEl   = document.getElementById('devices-count');
         const badgeEl   = document.getElementById('nav-device-badge');
         if (countEl) countEl.textContent = `${remaining} device${remaining !== 1 ? 's' : ''}`;
@@ -2058,11 +2121,14 @@ async function runTopologyFromSaved(topo, cveData) {
     <div class="scan-spinner" style="width:32px;height:32px;margin:0 auto 12px"></div>
     <div style="color:var(--text-muted)">Loading saved topology…</div>
   </div>`;
-  let fsDevices = [];
+  let fsDevices = [], netDevices = [];
   if (typeof window.__getFirestoreDevices === 'function') {
     fsDevices = await window.__getFirestoreDevices();
   }
-  renderTopology(topo, cveData, fsDevices, null);
+  if (typeof window.__getNetworkDevices === 'function') {
+    netDevices = await window.__getNetworkDevices();
+  }
+  renderTopology(topo, cveData, fsDevices, null, netDevices);
   showCachedNarrativeOrHint(topo, cveData);   // no AI call unless cached
 }
 
@@ -2084,12 +2150,15 @@ async function runTopologyBuild() {
     const topo = await res.json();
     if (!topo.ok) throw new Error(topo.error || 'Topology failed');
 
-    let fsDevices = [];
+    let fsDevices = [], netDevices = [];
     if (typeof window.__getFirestoreDevices === 'function') {
       fsDevices = await window.__getFirestoreDevices();
     }
+    if (typeof window.__getNetworkDevices === 'function') {
+      netDevices = await window.__getNetworkDevices();
+    }
 
-    renderTopology(topo, _cveData, fsDevices, null);
+    renderTopology(topo, _cveData, fsDevices, null, netDevices);
     showCachedNarrativeOrHint(topo, _cveData);   // no AI call unless cached
 
   } catch (err) {
@@ -2114,13 +2183,33 @@ function _deviceRisk(d) {
   return 'unknown';
 }
 
-function renderTopology(topo, cveData, fsDevices, aiPaths) {
+// Copy MAC/vendor/OS/ports from a discovered LAN device onto a graph node's data,
+// so the box label and the click-through detail panel are filled with real info.
+function _attachNetInfo(data, nd) {
+  if (!nd) return;
+  data.ip          = data.ip || nd.ip || '';
+  if (nd.mac)         data.mac = nd.mac;
+  if (nd.vendor)      data.vendor = nd.vendor;
+  if (nd.device_type) data.device_type = nd.device_type;
+  const os = nd.os_details || nd.os_guess;
+  if (os)             data.os = os;
+  if (nd.open_ports?.length) data.open_ports = nd.open_ports;
+  if (nd.services?.length)   data.services   = nd.services;
+  if (nd.hostname)    data.dhostname = nd.hostname;
+}
+
+function renderTopology(topo, cveData, fsDevices, aiPaths, netDevices) {
   window.__lastTopo = topo;          // so the AI-analysis button can find the current topo
+  netDevices = netDevices || window.__netDevices || [];
   const hostname = topo.hostname || 'This Device';
   const gateway  = topo.gateway;
   const myIps    = topo.my_ips || [];
   const neighbors = topo.neighbors || [];
   const myIp     = myIps[0]?.ip || '?';
+
+  // Index discovered LAN devices by IP so neighbours can be enriched in place.
+  const netByIp = {};
+  for (const nd of netDevices) if (nd.ip) netByIp[nd.ip] = nd;
 
   const critical = cveData?.counts?.critical ?? 0;
   const high     = cveData?.counts?.high ?? 0;
@@ -2132,9 +2221,11 @@ function renderTopology(topo, cveData, fsDevices, aiPaths) {
   // Internet node
   elements.push({ data: { id: 'internet', label: 'Internet', type: 'internet', risk: 'none' } });
 
-  // Gateway/router
+  // Gateway/router — enrich with the agent's discovered vendor/OS when present.
   if (gateway) {
-    elements.push({ data: { id: 'router', label: gateway, sublabel: 'Router / Gateway', type: 'router', risk: 'none' } });
+    const gwData = { id: 'router', label: gateway, sublabel: 'Router / Gateway', type: 'router', risk: 'none', ip: gateway };
+    _attachNetInfo(gwData, netByIp[gateway]);
+    elements.push({ data: gwData });
     elements.push({ data: { id: 'e-inet-router', source: 'internet', target: 'router', etype: 'wan' } });
   }
 
@@ -2143,32 +2234,57 @@ function renderTopology(topo, cveData, fsDevices, aiPaths) {
     id:       'current',
     label:    hostname,
     sublabel: myIp,
+    ip:       myIp,
     type:     'current',
     risk:     riskLevel,
     color:    _RISK_COLOR[riskLevel],
   }});
   elements.push({ data: { id: 'e-gw-current', source: gateway ? 'router' : 'internet', target: 'current', etype: 'lan' } });
 
-  // ARP neighbors
-  const neighborIds = [];
+  // ARP neighbors (enriched with discovered MAC / vendor / OS / ports)
+  const seenIps = new Set([gateway, myIp].filter(Boolean));
   for (const n of neighbors) {
     if (!n.ip || n.ip === gateway) continue;
+    seenIps.add(n.ip);
     const nid = 'n-' + n.ip.replace(/[:.]/g, '_');
-    neighborIds.push(nid);
 
+    const nd     = netByIp[n.ip];
     const known  = fsDevices.find(d => d.hostname === n.ip);
     const nRisk  = known ? _deviceRisk(known) : 'unknown';
+    const nLabel = (known && known.hostname) || nd?.hostname || n.ip;
 
-    elements.push({ data: {
+    const data = {
       id:       nid,
-      label:    known ? known.hostname : n.ip,
-      sublabel: known ? n.ip : (n.mac ? n.mac.slice(-8) : ''),
+      label:    nLabel,
+      sublabel: nLabel === n.ip ? (n.mac ? n.mac.slice(-8) : '') : n.ip,
+      ip:       n.ip,
+      mac:      n.mac || '',
       type:     'neighbor',
       risk:     nRisk,
       color:    _RISK_COLOR[nRisk],
       state:    Array.isArray(n.state) ? n.state[0] : (n.state || ''),
-    }});
+    };
+    _attachNetInfo(data, nd);
+    elements.push({ data });
     elements.push({ data: { id: 'e-gw-' + nid, source: gateway ? 'router' : 'current', target: nid, etype: 'lan' } });
+  }
+
+  // Discovered LAN devices not in the ARP table (the agent saw more than the host)
+  for (const nd of netDevices) {
+    if (!nd.ip || seenIps.has(nd.ip)) continue;
+    seenIps.add(nd.ip);
+    const did = 'd-' + nd.ip.replace(/[:.]/g, '_');
+    const data = {
+      id:       did,
+      label:    nd.hostname || nd.ip,
+      sublabel: nd.hostname ? nd.ip : (nd.vendor || ''),
+      type:     'discovered',
+      risk:     'unknown',
+      color:    _RISK_COLOR.unknown,
+    };
+    _attachNetInfo(data, nd);
+    elements.push({ data });
+    elements.push({ data: { id: 'e-gw-' + did, source: gateway ? 'router' : 'current', target: did, etype: 'lan' } });
   }
 
   // Firestore devices not seen in ARP (previously scanned, maybe offline now)
@@ -2191,7 +2307,7 @@ function renderTopology(topo, cveData, fsDevices, aiPaths) {
   // Attack web — 100% deterministic from real CVE + network data (one edge per
   // CVE → host, lateral movement, secondary entry points). No AI/invented data
   // is ever drawn on the map; the AI only writes the narrative text below it.
-  const webDefs = _cveAttackEdges(topo, cveData, neighbors, fsDevices);
+  const webDefs = _cveAttackEdges(topo, cveData, neighbors, fsDevices, netDevices, seenIps);
   for (const def of webDefs) {
     const okSrc = elements.some(e => e.data?.id === def.data.source);
     const okTgt = elements.some(e => e.data?.id === def.data.target);
@@ -2205,14 +2321,26 @@ function renderTopology(topo, cveData, fsDevices, aiPaths) {
     const d = el.data;
     if (!d || d.source !== undefined) continue;            // skip edges
     if (d.type === 'internet') { d.info = 'INTERNET'; continue; }
-    if (d.type === 'router')   { d.info = 'GATEWAY\n' + (d.label || ''); continue; }
-    const parts = [d.label || '?'];
+    if (d.type === 'router')   {
+      d.info = 'GATEWAY\n' + (d.label || '') + (d.vendor ? '\n' + d.vendor : '');
+      continue;
+    }
+    // Device-type icon inside the bubble (matches the device cards)
+    const icon = d.type === 'current' ? '🖥️'
+               : d.device_type        ? _discoveredIcon(d.device_type)
+               : d.type === 'known'   ? '🖥️'
+               : d.type === 'neighbor' || d.type === 'discovered' ? '🔌' : '';
+    const parts = [(icon ? icon + '  ' : '') + (d.label || '?')];
     if (d.sublabel) parts.push(d.sublabel);
+    // Surface the discovered OS / vendor right inside the box.
+    const osVendor = d.os || d.vendor;
+    if (osVendor) parts.push(osVendor.length > 22 ? osVendor.slice(0, 21) + '…' : osVendor);
     const cnt = d.type === 'current' ? { c: critical, h: high }
-              : (_cntByName[d.label] || _cntByName[d.hostname]);
+              : (_cntByName[d.label] || _cntByName[d.dhostname]);
     if (cnt && (cnt.c || cnt.h)) parts.push(`${cnt.c} crit · ${cnt.h} high`);
+    else if ((d.open_ports?.length)) parts.push(`${d.open_ports.length} open port${d.open_ports.length !== 1 ? 's' : ''}`);
     else if (d.risk === 'clean')   parts.push('no known CVEs');
-    else if (d.risk === 'unknown') parts.push('not yet scanned');
+    else if (d.risk === 'unknown' && d.type !== 'discovered') parts.push('not yet scanned');
     d.info = parts.join('\n');
   }
 
@@ -2350,6 +2478,18 @@ function _topoStyle() {
       },
     },
     {
+      // Discovered-by-agent hosts: teal dashed outline = seen on the wire,
+      // not yet system-scanned.
+      selector: 'node[type="discovered"]',
+      style: {
+        'background-color': '#0c1620',
+        'border-color':     '#00d4ff',
+        'border-width':      1.5,
+        'border-style':     'dashed',
+        'color':            '#bfe9ff',
+      },
+    },
+    {
       selector: 'node[risk="critical"]',
       style: { 'border-color': '#ff3860', 'border-width': 3 },
     },
@@ -2445,14 +2585,52 @@ function showTopoNodeInfo(d) {
 
   if (d.type === 'internet') {
     panel.innerHTML = '<strong>Internet</strong> — External attacker entry point. Devices with network-accessible CVEs are reachable from here.';
-  } else if (d.type === 'router') {
-    panel.innerHTML = `<strong>Gateway Router</strong> <code>${escapeHtml(d.label)}</code> — Controls all traffic on this network. A compromised host can intercept or reroute router-level traffic.`;
-  } else {
-    const sub = d.sublabel ? ` <span class="text-muted">${escapeHtml(d.sublabel)}</span>` : '';
-    panel.innerHTML = `<strong>${escapeHtml(d.label)}</strong>${sub} — Risk: ${riskLabel}`;
-    if (d.type === 'known') panel.innerHTML += ' <span class="text-muted">(previously scanned, not seen on ARP table)</span>';
-    if (d.state && d.state !== 'REACHABLE') panel.innerHTML += ` <span class="text-muted">· ARP state: ${escapeHtml(d.state)}</span>`;
+    panel.style.display = 'block';
+    return;
   }
+
+  // Build a key/value detail grid from whatever the node carries. This is what
+  // makes the boxes "clickable with real info": IP, MAC, vendor, OS, ports…
+  const rows = [];
+  const kv = (label, value) => { if (value) rows.push(
+    `<div class="topo-kv"><span class="topo-kv-label">${label}</span>` +
+    `<span class="topo-kv-value mono">${escapeHtml(String(value))}</span></div>`); };
+
+  kv('IP', d.ip || (d.type === 'router' ? d.label : ''));
+  kv('MAC', d.mac);
+  kv('Vendor', d.vendor);
+  kv('Type', d.device_type);
+  kv('OS', d.os);
+  if (d.dhostname && d.dhostname !== d.label) kv('Hostname', d.dhostname);
+  if (d.state && d.state !== 'REACHABLE') kv('ARP state', d.state);
+
+  const ports = Array.isArray(d.open_ports) ? d.open_ports : [];
+  const portChips = ports.length
+    ? `<div class="topo-ports">${ports.slice(0, 12).map(p =>
+        `<span class="topo-port-chip mono">${escapeHtml(p)}</span>`).join('')}` +
+      `${ports.length > 12 ? `<span class="topo-port-chip mono">+${ports.length - 12}</span>` : ''}</div>`
+    : '';
+
+  let heading;
+  if (d.type === 'router') {
+    heading = `<strong>Gateway / Router</strong> — controls all LAN traffic; a foothold here means full interception.`;
+  } else if (d.type === 'current') {
+    heading = `<strong>${escapeHtml(d.label)}</strong> <span class="text-muted">this device</span> — Risk: ${riskLabel}`;
+  } else if (d.type === 'discovered') {
+    heading = `<strong>${escapeHtml(d.label)}</strong> <span class="text-muted">discovered on LAN — not yet system-scanned</span>`;
+  } else if (d.type === 'known') {
+    heading = `<strong>${escapeHtml(d.label)}</strong> — Risk: ${riskLabel} <span class="text-muted">(previously scanned, offline now)</span>`;
+  } else {
+    heading = `<strong>${escapeHtml(d.label)}</strong> — Risk: ${riskLabel}`;
+  }
+
+  panel.innerHTML =
+    `<div class="topo-node-head">${heading}</div>` +
+    (rows.length ? `<div class="topo-kv-grid">${rows.join('')}</div>` : '') +
+    (portChips ? `<div class="topo-kv-label" style="margin-top:8px">Open ports — ${ports.length}</div>${portChips}` : '') +
+    (rows.length === 0 && !portChips
+      ? '<div class="text-muted" style="font-size:11px;margin-top:4px">No additional detail. Run the desktop agent\'s network scan to enrich this host with MAC, vendor, OS and open ports.</div>'
+      : '');
   panel.style.display = 'block';
 }
 
@@ -2525,7 +2703,7 @@ function _attackEdgeDefs(paths, topo, neighbors) {
 // Deterministic kill-web: one attack edge per network-relevant CVE converging on
 // the host (multiple CVEs → same target), plus lateral movement and secondary
 // entry points. Guarantees a web regardless of what the LLM returns.
-function _cveAttackEdges(topo, cveData, neighbors, fsDevices) {
+function _cveAttackEdges(topo, cveData, neighbors, fsDevices, netDevices, seenIps) {
   const defs = [];
   const top = (cveData?.cves || [])
     .filter(c => ['critical', 'high'].includes(c.severity))
@@ -2551,6 +2729,22 @@ function _cveAttackEdges(topo, cveData, neighbors, fsDevices) {
       data: { id: `cvepivot-${j}`, source: 'current', target: 'n-' + n.ip.replace(/[:.]/g, '_'),
               etype: 'pivot', pathIndex: idx, vector: 'Lateral movement',
               technique: 'Lateral movement', cves: '', cveLabel: '' },
+      classes: `attack-pivot attack-pivot-${idx}`,
+    });
+  });
+
+  // Lateral movement onto agent-discovered hosts (not in the host's ARP table).
+  // Exposed services on these become the pivot's technique label.
+  const arpIps = new Set((neighbors || []).map(n => n.ip).filter(Boolean));
+  (netDevices || []).forEach((nd, k) => {
+    if (!nd.ip || arpIps.has(nd.ip) || nd.ip === topo.gateway || nd.ip === topo.my_ips?.[0]?.ip) return;
+    const idx = k % _ATTACK_COLORS.length;
+    const tech = (nd.open_ports?.length)
+      ? `Pivot via ${nd.open_ports[0]}` : 'Lateral movement';
+    defs.push({
+      data: { id: `cvedisc-${k}`, source: 'current', target: 'd-' + nd.ip.replace(/[:.]/g, '_'),
+              etype: 'pivot', pathIndex: idx, vector: 'Lateral movement',
+              technique: tech, cves: '', cveLabel: '' },
       classes: `attack-pivot attack-pivot-${idx}`,
     });
   });
