@@ -2198,6 +2198,24 @@ function renderTopology(topo, cveData, fsDevices, aiPaths) {
     if (okSrc && okTgt) elements.push(def);
   }
 
+  // Compose the in-node label so each shape is FILLED with device info
+  const _cntByName = {};
+  for (const d of (fsDevices || [])) if (d.hostname) _cntByName[d.hostname] = { c: d.critical ?? 0, h: d.high ?? 0 };
+  for (const el of elements) {
+    const d = el.data;
+    if (!d || d.source !== undefined) continue;            // skip edges
+    if (d.type === 'internet') { d.info = 'INTERNET'; continue; }
+    if (d.type === 'router')   { d.info = 'GATEWAY\n' + (d.label || ''); continue; }
+    const parts = [d.label || '?'];
+    if (d.sublabel) parts.push(d.sublabel);
+    const cnt = d.type === 'current' ? { c: critical, h: high }
+              : (_cntByName[d.label] || _cntByName[d.hostname]);
+    if (cnt && (cnt.c || cnt.h)) parts.push(`${cnt.c} crit · ${cnt.h} high`);
+    else if (d.risk === 'clean')   parts.push('no known CVEs');
+    else if (d.risk === 'unknown') parts.push('not yet scanned');
+    d.info = parts.join('\n');
+  }
+
   const container = document.getElementById('topology-cy');
   container.innerHTML = '';
 
@@ -2234,7 +2252,32 @@ function renderTopology(topo, cveData, fsDevices, aiPaths) {
   cy.on('tap', 'node', evt => showTopoNodeInfo(evt.target.data()));
   cy.on('tap', 'edge', evt => showTopoEdgeInfo(evt.target.data()));
   window._topo_cy = cy;
+  _applyTopoFilters();   // honour the current filter selection on (re)build
 }
+
+// Show/hide topology nodes (by risk) and attack/lateral edges from the filter chips
+function _applyTopoFilters() {
+  const cy = window._topo_cy;
+  if (!cy) return;
+  const risks = [...document.querySelectorAll('.topo-filter.active[data-filter="risk"]')].map(b => b.dataset.val);
+  const showAttack = document.querySelector('.topo-filter[data-filter="edge"][data-val="attack"]')?.classList.contains('active');
+  const showPivot  = document.querySelector('.topo-filter[data-filter="edge"][data-val="pivot"]')?.classList.contains('active');
+  cy.batch(() => {
+    cy.nodes().forEach(n => {
+      const t = n.data('type');
+      if (t === 'internet' || t === 'router') { n.style('display', 'element'); return; }   // keep infrastructure
+      const risk = n.data('risk') || 'unknown';
+      n.style('display', risks.includes(risk) ? 'element' : 'none');
+    });
+    cy.edges('.attack-path').style('display', showAttack ? 'element' : 'none');
+    cy.edges('.attack-pivot').style('display', showPivot ? 'element' : 'none');
+  });
+}
+
+// Wire the topology filter chips once
+document.querySelectorAll('#topo-filters .topo-filter').forEach(btn => {
+  btn.addEventListener('click', () => { btn.classList.toggle('active'); _applyTopoFilters(); });
+});
 
 function _topoStyle() {
   return [
@@ -2243,19 +2286,20 @@ function _topoStyle() {
       style: {
         'background-color':  '#0f1117',
         'border-color':      '#2a3050',
-        'border-width':       2,
-        'label':             'data(label)',
-        'color':             '#e2e8f0',
-        'font-size':         '10px',
+        'border-width':       1.5,
+        'label':             'data(info)',          // multi-line device info INSIDE the shape
+        'color':             '#cbd5e1',
+        'font-size':         '8px',
         'font-family':       '"JetBrains Mono", monospace',
-        'text-valign':       'bottom',
+        'text-valign':       'center',
         'text-halign':       'center',
-        'text-margin-y':      8,
-        'width':              50,
-        'height':             50,
         'text-wrap':         'wrap',
-        'text-max-width':     110,
-        'shape':             'ellipse',
+        'text-max-width':     106,
+        'line-height':        1.35,
+        'shape':             'round-rectangle',
+        'width':              120,
+        'height':             52,
+        'padding':           '6px',
       },
     },
     {
@@ -2263,36 +2307,36 @@ function _topoStyle() {
       style: {
         'background-color': '#0a1628',
         'border-color':     '#4a9eff',
-        'border-width':      3,
-        'width':             68,
-        'height':            68,
-        'color':            '#4a9eff',
-        'font-size':        '11px',
+        'border-width':      2,
+        'shape':            'ellipse',
+        'width':             74,
+        'height':            74,
+        'color':            '#7fc0ff',
+        'font-size':        '9px',
+        'font-weight':      '700',
       },
     },
     {
       selector: 'node[type="router"]',
       style: {
-        'background-color': '#0f1117',
+        'background-color': '#15121f',
         'border-color':     '#7b61ff',
-        'border-width':      2,
-        'shape':            'diamond',
-        'width':             60,
-        'height':            60,
-        'color':            '#a78bfa',
+        'border-width':      1.5,
+        'width':             100,
+        'height':            48,
+        'color':            '#b9a6ff',
       },
     },
     {
       selector: 'node[type="current"]',
       style: {
-        'background-color': 'data(color)',
+        'background-color': '#11141d',
         'border-color':     'data(color)',
-        'border-width':      3,
-        'shape':            'rectangle',
-        'width':             76,
-        'height':            58,
+        'border-width':      2.5,
+        'width':             148,
+        'height':            62,
         'color':            '#ffffff',
-        'font-size':        '12px',
+        'font-size':        '9px',
         'font-weight':      '700',
       },
     },
@@ -2301,7 +2345,7 @@ function _topoStyle() {
       style: {
         'background-color': '#0f1117',
         'border-color':     'data(color)',
-        'border-width':      2,
+        'border-width':      1.5,
         'color':            '#c0caf5',
       },
     },

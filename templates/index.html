@@ -534,6 +534,16 @@
             <button class="btn btn-ghost btn-sm" id="topo-rebuild-btn">↺ Rebuild</button>
           </div>
         </div>
+        <div class="topo-filters" id="topo-filters">
+          <span class="topo-filters-label">Filter</span>
+          <button class="topo-filter active" data-filter="risk" data-val="critical">Critical</button>
+          <button class="topo-filter active" data-filter="risk" data-val="high">High</button>
+          <button class="topo-filter active" data-filter="risk" data-val="clean">Clean</button>
+          <button class="topo-filter active" data-filter="risk" data-val="unknown">Unknown</button>
+          <span class="topo-filter-div"></span>
+          <button class="topo-filter active" data-filter="edge" data-val="attack">Attack paths</button>
+          <button class="topo-filter active" data-filter="edge" data-val="pivot">Lateral moves</button>
+        </div>
         <div id="topology-cy" class="topo-canvas">
           <div class="empty-state">
             <div class="empty-icon">⬡</div>

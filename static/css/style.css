@@ -2666,3 +2666,23 @@ ul { list-style: none; }
   display: flex; align-items: center; justify-content: center;
   font-size: 11px; font-weight: 700; color: #08090e; background: var(--sev-medium);
 }
+
+/* ── Topology filter chips ──────────────────────────────────────────── */
+.topo-filters {
+  display: flex; align-items: center; gap: 7px; flex-wrap: wrap;
+  padding: 11px 18px; border-bottom: 1px solid var(--border);
+  background: var(--bg-panel);
+}
+.topo-filters-label {
+  font-size: 11px; color: var(--text-muted); text-transform: uppercase;
+  letter-spacing: 0.08em; margin-right: 2px;
+}
+.topo-filter {
+  font-size: 11px; font-weight: 500; padding: 4px 11px; border-radius: 999px;
+  cursor: pointer; color: var(--text-muted); font-family: var(--font-sans);
+  background: var(--bg-card); border: 1px solid var(--border);
+  transition: var(--transition);
+}
+.topo-filter:hover { color: var(--text-secondary); border-color: var(--border-accent); }
+.topo-filter.active { color: var(--accent); background: var(--accent-glow); border-color: var(--accent-dim); }
+.topo-filter-div { width: 1px; height: 18px; background: var(--border); margin: 0 4px; }
