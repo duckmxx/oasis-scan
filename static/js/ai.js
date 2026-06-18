@@ -414,39 +414,82 @@ function _scrollMsgs() {
 
 /* ── Voice input (STT) ────────────────────────────────────── */
 
-function _toggleMic() {
-  const SR    = window.SpeechRecognition || window.webkitSpeechRecognition;
-  const btn   = document.getElementById('ai-mic-btn');
-  if (!SR) { alert('Speech recognition is not supported in this browser.'); return; }
+let _mediaRecorder = null;
+let _audioChunks   = [];
 
-  if (_AI.listening) {
-    _AI.recognition?.stop();
+async function _toggleMic() {
+  const btn = document.getElementById('ai-mic-btn');
+
+  // If already recording, stop
+  if (_AI.listening && _mediaRecorder) {
+    _mediaRecorder.stop();
     return;
   }
 
-  const r = new SR();
-  r.lang             = 'en-US';
-  r.interimResults   = false;
-  r.maxAlternatives  = 1;
-  _AI.recognition    = r;
-  _AI.listening      = true;
-  if (btn) btn.classList.add('ai-mic-active');
+  // Try native SpeechRecognition first (Chrome)
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (SR) {
+    if (_AI.listening) { _AI.recognition?.stop(); return; }
+    const r = new SR();
+    r.lang = 'en-US'; r.interimResults = false; r.maxAlternatives = 1;
+    _AI.recognition = r; _AI.listening = true;
+    if (btn) btn.classList.add('ai-mic-active');
+    r.onresult = e => {
+      const t = e.results[0][0].transcript.trim();
+      const input = document.getElementById('ai-input');
+      if (input) input.value = t;
+      _AI.listening = false;
+      if (btn) btn.classList.remove('ai-mic-active');
+      if (t) _sendAIMessage(t);
+    };
+    r.onerror = r.onend = () => { _AI.listening = false; if (btn) btn.classList.remove('ai-mic-active'); };
+    r.start();
+    return;
+  }
 
-  r.onresult = e => {
-    const transcript = e.results[0][0].transcript.trim();
-    const input = document.getElementById('ai-input');
-    if (input) input.value = transcript;
+  // Fallback: MediaRecorder → Groq Whisper (Firefox / any browser)
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (e) {
+    alert('Microphone access denied.');
+    return;
+  }
+
+  _audioChunks = [];
+  const mimeType = MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : 'audio/ogg';
+  _mediaRecorder = new MediaRecorder(stream, { mimeType });
+
+  _mediaRecorder.ondataavailable = e => { if (e.data.size > 0) _audioChunks.push(e.data); };
+
+  _mediaRecorder.onstop = async () => {
+    stream.getTracks().forEach(t => t.stop());
     _AI.listening = false;
     if (btn) btn.classList.remove('ai-mic-active');
-    if (transcript) _sendAIMessage(transcript);
+    if (btn) btn.textContent = '🎙';
+
+    const blob = new Blob(_audioChunks, { type: mimeType });
+    const fd   = new FormData();
+    fd.append('audio', blob, 'recording.' + (mimeType.includes('webm') ? 'webm' : 'ogg'));
+
+    try {
+      const res  = await fetch('/api/stt', { method: 'POST', body: fd });
+      const data = await res.json();
+      if (data.ok && data.text) {
+        const input = document.getElementById('ai-input');
+        if (input) input.value = data.text;
+        _sendAIMessage(data.text);
+      } else {
+        alert('Could not transcribe audio.');
+      }
+    } catch (_) {
+      alert('STT request failed.');
+    }
   };
 
-  r.onerror = r.onend = () => {
-    _AI.listening = false;
-    if (btn) btn.classList.remove('ai-mic-active');
-  };
-
-  r.start();
+  _AI.listening = true;
+  if (btn) { btn.classList.add('ai-mic-active'); btn.textContent = '⏹'; }
+  _mediaRecorder.start();
 }
 
 /* ── Voice output (TTS) ───────────────────────────────────── */
@@ -461,8 +504,31 @@ function _cleanForSpeech(text) {
     .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
     .replace(/#+\s/g, '')
     .replace(/\n{2,}/g, '. ')
-    .replace(/\n/g, ', ')
-    .slice(0, 1000);
+    .replace(/\n/g, ', ');
+}
+
+function _chunkText(text, maxLen = 900) {
+  if (text.length <= maxLen) return [text];
+  const chunks = [];
+  const sentences = text.match(/[^.!?]+[.!?]+/g) || [];
+  let current = '';
+  for (const s of sentences) {
+    if (s.length > maxLen) {
+      if (current) { chunks.push(current.trim()); current = ''; }
+      for (let i = 0; i < s.length; i += maxLen) chunks.push(s.slice(i, i + maxLen).trim());
+    } else if ((current + s).length > maxLen && current) {
+      chunks.push(current.trim());
+      current = s;
+    } else {
+      current += s;
+    }
+  }
+  if (current.trim()) chunks.push(current.trim());
+  // fallback: hard split if no sentence boundaries found
+  if (!chunks.length) {
+    for (let i = 0; i < text.length; i += maxLen) chunks.push(text.slice(i, i + maxLen).trim());
+  }
+  return chunks.filter(c => c.length > 0);
 }
 
 function _stopAudio() {
@@ -471,40 +537,51 @@ function _stopAudio() {
     if (_AI.audio._url) URL.revokeObjectURL(_AI.audio._url);
     _AI.audio = null;
   }
+  _AI._chunkAbort = true;
+  _AI._speaking   = false;
   speechSynthesis?.cancel();
+}
+
+async function _speakChunk(text, s) {
+  return new Promise(resolve => {
+    fetch('/api/tts', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ text, speed: s.speed, volume: s.volume }),
+    }).then(res => {
+      if (!res.ok) { _speakBrowser(text); return resolve(); }
+      return res.blob();
+    }).then(blob => {
+      if (!blob) return resolve();
+      const url   = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      audio._url    = url;
+      audio.volume  = s.volume;
+      audio.onended = () => { URL.revokeObjectURL(url); resolve(); };
+      audio.onerror = () => { URL.revokeObjectURL(url); _speakBrowser(text); resolve(); };
+      _AI.audio = audio;
+      audio.play().catch(() => { _speakBrowser(text); resolve(); });
+    }).catch(() => { _speakBrowser(text); resolve(); });
+  });
 }
 
 async function _speak(text) {
   if (!_AI.ttsEnabled || !text) return;
+  if (_AI._speaking) return;
   _stopAudio();
-  const clean = _cleanForSpeech(text);
-  const s     = window.__jarvisSettings;
+  _AI._chunkAbort = false;
+  _AI._speaking = true;
+  const clean  = _cleanForSpeech(text);
+  const chunks = _chunkText(clean);
+  const s      = window.__jarvisSettings;
 
   try {
-    const res = await fetch('/api/tts', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({
-        text:   clean,
-        speed:  s.speed,
-        volume: s.volume,
-      }),
-    });
-
-    if (!res.ok) { _speakBrowser(clean); return; }
-
-    const blob  = await res.blob();
-    const url   = URL.createObjectURL(blob);
-    const audio = new Audio(url);
-    audio._url     = url;
-    audio.volume   = s.volume;
-    audio.onended  = () => URL.revokeObjectURL(url);
-    audio.onerror  = () => { URL.revokeObjectURL(url); _speakBrowser(clean); };
-    _AI.audio = audio;
-    audio.play().catch(() => _speakBrowser(clean));
-
-  } catch (_) {
-    _speakBrowser(clean);
+    for (const chunk of chunks) {
+      if (_AI._chunkAbort) break;
+      await _speakChunk(chunk, s);
+    }
+  } finally {
+    _AI._speaking = false;
   }
 }
 

@@ -2552,7 +2552,7 @@ function _topoStyle() {
       },
     },
     {
-      selector: '.attack-path',
+      selector: '.attack-path[cveLabel]',
       style: {
         'line-color':          '#ff3860',
         'target-arrow-color':  '#ff3860',
@@ -2572,7 +2572,7 @@ function _topoStyle() {
       },
     },
     {
-      selector: '.attack-pivot',
+      selector: '.attack-pivot[cveLabel]',
       style: {
         'line-color':          '#ff6b35',
         'target-arrow-color':  '#ff6b35',

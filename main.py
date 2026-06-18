@@ -261,6 +261,45 @@ def api_ai_complete():
                 pass
 
 
+@app.route("/api/stt", methods=["POST"])
+def api_stt():
+    audio = flask.request.files.get("audio")
+    if not audio:
+        return flask.jsonify({"ok": False, "error": "No audio file"}), 400
+
+    audio_bytes = audio.read()
+    filename    = audio.filename or "recording.webm"
+    boundary    = "----WBoundary" + _os.urandom(8).hex()
+
+    body  = b""
+    body += f"--{boundary}\r\n".encode()
+    body += b'Content-Disposition: form-data; name="model"\r\n\r\n'
+    body += b"whisper-large-v3-turbo\r\n"
+    body += f"--{boundary}\r\n".encode()
+    body += f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'.encode()
+    body += b"Content-Type: audio/webm\r\n\r\n"
+    body += audio_bytes + b"\r\n"
+    body += f"--{boundary}--\r\n".encode()
+
+    conn = None
+    try:
+        conn = http.client.HTTPSConnection("api.groq.com", 443, timeout=30)
+        conn.request("POST", "/openai/v1/audio/transcriptions", body=body, headers={
+            "Authorization": f"Bearer {GROQ_API_KEY}",
+            "Content-Type":  f"multipart/form-data; boundary={boundary}",
+        })
+        resp = conn.getresponse()
+        data = json.loads(resp.read().decode("utf-8", errors="replace"))
+        text = data.get("text", "").strip()
+        return flask.jsonify({"ok": True, "text": text})
+    except Exception as e:
+        return flask.jsonify({"ok": False, "error": str(e)}), 500
+    finally:
+        if conn:
+            try: conn.close()
+            except Exception: pass
+
+
 @app.route("/api/tts", methods=["POST"])
 def api_tts():
     data = flask.request.get_json(force=True) or {}

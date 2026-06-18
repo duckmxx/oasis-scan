@@ -38,8 +38,8 @@ log = logging.getLogger("piper_tts")
 
 # ── Config ───────────────────────────────────────────────────────────────────
 MODEL_REPO  = os.environ.get("PIPER_MODEL_REPO",  "jgkawell/jarvis")
-MODEL_FILE  = os.environ.get("PIPER_MODEL_FILE",  "model.onnx")
-CONFIG_FILE = os.environ.get("PIPER_CONFIG_FILE", "model.onnx.json")
+MODEL_FILE  = os.environ.get("PIPER_MODEL_FILE",  "en/en_GB/jarvis/high/jarvis-high.onnx")
+CONFIG_FILE = os.environ.get("PIPER_CONFIG_FILE", "en/en_GB/jarvis/high/jarvis-high.onnx.json")
 HOST        = os.environ.get("PIPER_HOST",        "127.0.0.1")
 PORT        = int(os.environ.get("PIPER_PORT",    "5001"))
 
@@ -67,9 +67,10 @@ async def lifespan(_app: fastapi.FastAPI):
 
     log.info("Loading Piper voice from %s …", model_path)
     from piper.voice import PiperVoice
+    use_cuda = os.environ.get("PIPER_CUDA", "0") == "1"
     _voice = await loop.run_in_executor(
         None,
-        lambda: PiperVoice.load(model_path, config_path=config_path, use_cuda=False),
+        lambda: PiperVoice.load(model_path, config_path=config_path, use_cuda=use_cuda),
     )
     log.info(
         "Voice ready — sample rate %d Hz, %d speaker(s)",
