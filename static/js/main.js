@@ -914,16 +914,16 @@ function populateOverviewCVEs(cves, counts) {
   box.innerHTML = top.map(c => {
     const sev   = c.severity || 'unknown';
     const score = c.cvss != null ? Number(c.cvss).toFixed(1) : '—';
-    // Link straight to the CVE's advisory page (provided URL, else NVD/Arch).
+    // Redirect to this CVE in the CVEs tab (scrolls + expands it), not an
+    // external advisory site.
     const id    = String(c.id || '');
-    const url   = c.url
-      || (id.startsWith('CVE-') ? `https://nvd.nist.gov/vuln/detail/${id}`
-        : id.startsWith('ASA-') ? `https://security.archlinux.org/advisory/${id}` : '');
-    const open  = url ? ` style="cursor:pointer" title="Open ${escapeHtml(id)} advisory" onclick="window.open('${escapeHtml(url)}','_blank','noopener')"` : '';
-    return `<div class="ov-cve-row"${open}>
+    return `<div class="ov-cve-row" role="button" tabindex="0" style="cursor:pointer"
+        title="View ${escapeHtml(id)} in CVEs"
+        onclick="window.__gotoCVE('${escapeHtml(id)}')"
+        onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();window.__gotoCVE('${escapeHtml(id)}')}">
       <span class="cvss-score cvss-${sev}">${score}</span>
       <div class="ov-cve-main">
-        <span class="cve-id mono">${escapeHtml(c.id)}${url ? ' <span style="color:var(--accent);font-size:10px">↗</span>' : ''}</span>
+        <span class="cve-id mono">${escapeHtml(c.id)} <span style="color:var(--accent);font-size:10px">↗</span></span>
         <span class="ov-cve-pkg">${escapeHtml(c.package)}</span>
       </div>
       <span class="badge badge-${sev}">${sev}</span>
