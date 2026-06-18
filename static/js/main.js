@@ -2057,6 +2057,22 @@ function buildDeviceNetworkMap(devicesArray) {
     }
   }
 
+  // Compose in-node labels — the shared node style renders data(info), so without
+  // this the boxes would be empty.
+  for (const el of elements) {
+    const d = el.data;
+    if (!d || d.source !== undefined) continue;            // skip edges
+    if (d.type === 'router') { d.info = 'GATEWAY\n' + (d.label || ''); continue; }
+    const icon  = d.type === 'known' ? '🖥️' : '🔌';
+    const parts = [icon + '  ' + (d.label || '?')];
+    if (d.sublabel) parts.push(d.sublabel);
+    const dev = devicesArray.find(x => x.hostname === d.hostname);
+    const c = dev?.critical ?? 0, h = dev?.high ?? 0;
+    if (c || h) parts.push(`${c} crit · ${h} high`);
+    else if (d.risk === 'clean') parts.push('no known CVEs');
+    d.info = parts.join('\n');
+  }
+
   const cy = cytoscape({
     container,
     elements,
