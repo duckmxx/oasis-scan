@@ -1,5 +1,9 @@
 *.json
 
+# Firebase credentials — never commit API keys
+
+config.py
+
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -219,3 +223,14 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+# Groq API keys / secrets
+*groq*
+.env
+config.py
+secrets.json
+
+# ignore Groq secrets
+*groq*
+.env
+config.py
+secrets.json

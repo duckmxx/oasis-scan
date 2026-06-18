@@ -2,6 +2,7 @@ import getpass
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 import urllib.request
@@ -257,6 +258,40 @@ def get_network_neighbors():
         except json.JSONDecodeError:
             pass
     return []
+
+
+def get_nmap_scan(subnet: str) -> dict:
+    """Run nmap host-discovery on a subnet and return discovered devices."""
+    if not shutil.which("nmap"):
+        return {"available": False, "reason": "nmap not installed"}
+    if not subnet:
+        return {"available": False, "reason": "no subnet specified"}
+    out, err, rc = run(["nmap", "-sn", "-T4", subnet], timeout=180)
+    if rc not in (0, 1):
+        return {"available": False, "reason": err or "nmap failed"}
+    hosts = []
+    current: dict = {}
+    for line in out.splitlines():
+        if line.startswith("Nmap scan report for"):
+            if current:
+                hosts.append(current)
+            rest = line[len("Nmap scan report for "):].strip()
+            m = re.search(r"\(([^)]+)\)", rest)
+            if m:
+                current = {"hostname": rest[:rest.index("(")].strip(), "ip": m.group(1)}
+            else:
+                current = {"hostname": rest, "ip": rest}
+            current["vendor"] = ""
+        elif "MAC Address:" in line:
+            mac_m = re.search(r"([0-9A-F]{2}(?::[0-9A-F]{2}){5})", line, re.I)
+            vendor_m = re.search(r"\(([^)]+)\)", line)
+            if mac_m:
+                current["mac"] = mac_m.group(1)
+            if vendor_m:
+                current["vendor"] = vendor_m.group(1)
+    if current:
+        hosts.append(current)
+    return {"available": True, "hosts": hosts, "count": len(hosts)}
 
 
 def get_services():
