@@ -2560,3 +2560,31 @@ ul { list-style: none; }
 .patch-undone-pkg { font-family: var(--font-mono); color: var(--sev-low); flex: 1; }
 .btn-success { background: rgba(39,201,63,0.12); color: var(--sev-low); border: 1px solid rgba(39,201,63,0.3); }
 .btn-success:hover { background: rgba(39,201,63,0.22); }
+
+/* ── Patches: extra wiring (progress, AI output, flash) ─────────────── */
+.patch-check { display: flex; align-items: center; cursor: pointer; }
+.patch-check input { width: 15px; height: 15px; accent-color: var(--sev-low); cursor: pointer; }
+.patch-count { font-size: 11px; color: var(--text-muted); font-family: var(--font-mono); }
+.patch-fix-ver { font-size: 11px; color: var(--text-secondary); margin-left: auto; }
+.patch-fix-ver code { font-family: var(--font-mono); }
+.patch-toggle { font-size: 12px; color: var(--text-secondary); display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.patch-toggle input { accent-color: var(--accent); }
+.patch-progress-track { height: 6px; background: var(--bg-base); border-radius: 99px; overflow: hidden; border: 1px solid var(--border); }
+.patch-progress-fill { height: 100%; background: linear-gradient(90deg, var(--sev-low), #2fe06a); transition: width 0.4s ease; }
+.patch-ai-output { padding: 14px 16px; background: var(--bg-base); border-bottom: 1px solid var(--border); font-size: 13px; line-height: 1.55; }
+.patch-ai-loading { display: flex; align-items: center; gap: 10px; color: var(--text-secondary); }
+.patch-ai-head { font-weight: 700; color: var(--accent); margin-bottom: 8px; font-size: 12px; letter-spacing: 0.03em; }
+.patch-ai-body code { font-family: var(--font-mono); background: var(--bg-card); padding: 1px 5px; border-radius: 3px; color: var(--accent); }
+.patch-ai-pre { background: var(--bg-card); border: 1px solid var(--border-accent); border-radius: var(--radius-sm); padding: 10px 12px; margin: 8px 0; overflow-x: auto; }
+.patch-ai-pre code { background: none; padding: 0; color: var(--text-primary); font-family: var(--font-mono); font-size: 12px; white-space: pre; }
+.patch-item.patch-flash { animation: patchFlash 1.6s ease; }
+@keyframes patchFlash {
+  0%, 100% { box-shadow: 0 0 0 0 transparent; }
+  20%, 60% { box-shadow: 0 0 0 2px var(--accent); border-color: var(--accent); }
+}
+
+/* ── Impact-type filter bar ─────────────────────────────────────────── */
+.filter-bar-type { flex-wrap: wrap; gap: 6px; padding: 10px 20px 4px; }
+.filter-bar-label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.08em; margin-right: 4px; align-self: center; }
+.filter-chip.type-chip { font-size: 11px; }
+.filter-chip.type-chip.active { background: var(--accent-glow); color: var(--accent); border-color: var(--accent-dim); }

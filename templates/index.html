@@ -344,6 +344,20 @@
           </div>
         </div>
 
+        <!-- Impact-type filter chips (revealed when data is ready) -->
+        <div class="filter-bar filter-bar-type hidden" id="cve-type-filter-bar">
+          <span class="filter-bar-label">Impact</span>
+          <button class="filter-chip type-chip" data-type="RCE">Remote Code Exec</button>
+          <button class="filter-chip type-chip" data-type="EscPriv">Privilege Esc</button>
+          <button class="filter-chip type-chip" data-type="DoS">Denial of Service</button>
+          <button class="filter-chip type-chip" data-type="InfoDisc">Info Disclosure</button>
+          <button class="filter-chip type-chip" data-type="Overflow">Memory Overflow</button>
+          <button class="filter-chip type-chip" data-type="Bypass">Auth Bypass</button>
+          <button class="filter-chip type-chip" data-type="Traversal">Path Traversal</button>
+          <button class="filter-chip type-chip" data-type="UAF">Use-After-Free</button>
+          <button class="filter-chip type-chip" data-type="XSS">XSS</button>
+        </div>
+
         <!-- Device filter chips + search (revealed when data is ready) -->
         <div class="sec-toolbar hidden" id="cve-toolbar">
           <div class="sec-dev-chips" id="cve-dev-chips"></div>
@@ -364,11 +378,12 @@
                 <th>Fixed In</th>
                 <th>CVSS</th>
                 <th>Severity</th>
+                <th>Impact</th>
                 <th>Actions</th>
               </tr>
             </thead>
             <tbody id="cve-table-body">
-              <tr><td colspan="8">
+              <tr><td colspan="9">
                 <div class="empty-state">
                   <div class="empty-icon">⬡</div>
                   <div>No scan results yet. Run a scan to detect CVEs.</div>
@@ -376,6 +391,29 @@
               </td></tr>
             </tbody>
           </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================================================
+         SECTION: PATCHES (remediation playbook + AI)
+         =================================================== -->
+    <section class="page-section hidden" id="section-patches">
+      <div class="patch-summary-bar" id="patch-summary-bar" style="display:none"></div>
+
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title"><span class="icon">⚕</span> Patch Playbook</div>
+          <div style="display:flex;gap:8px;align-items:center">
+            <label class="patch-toggle"><input type="checkbox" id="patch-hide-done"> Hide done</label>
+            <button class="btn btn-ghost btn-sm" id="patch-reset-btn">Reset progress</button>
+          </div>
+        </div>
+        <div class="panel-body" id="patch-list">
+          <div class="empty-state">
+            <div class="empty-icon">⚕</div>
+            <div>No vulnerable packages yet — run a scan to build your patch to-do list.</div>
+          </div>
         </div>
       </div>
     </section>
@@ -1320,6 +1358,9 @@ curl -O https://scanoasis.tech/download/gui.py</code></pre>
       </div>
     </div>
   </div>
+
+  <!-- Toast notifications -->
+  <div id="toast-container"></div>
 
   <script src="/static/js/main.js"></script>
 

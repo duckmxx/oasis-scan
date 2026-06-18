@@ -19,6 +19,107 @@ window.__onSavedDataReady = function(data) {
   if (data.topology) _savedTopology = data.topology;
 };
 
+/* --- Toast notifications --- */
+window.showToast = function (msg, type = 'info', opts = {}) {
+  let container = document.getElementById('toast-container');
+  if (!container) {
+    container = document.createElement('div');
+    container.id = 'toast-container';
+    document.body.appendChild(container);
+  }
+  const icons = { info: 'ℹ', success: '✓', warning: '⚠', error: '✕', loading: '◴' };
+  const toast = document.createElement('div');
+  toast.className = `toast toast-${type}`;
+  toast.innerHTML = `<span class="toast-icon"></span><span class="toast-msg"></span>` +
+                    `<button class="toast-close" aria-label="Dismiss">✕</button>`;
+  toast.querySelector('.toast-icon').textContent = icons[type] ?? icons.info;
+  toast.querySelector('.toast-msg').textContent  = msg;
+
+  let timer = null;
+  const close = () => {
+    if (timer) { clearTimeout(timer); timer = null; }
+    toast.classList.remove('toast-show');
+    setTimeout(() => toast.remove(), 220);
+  };
+  toast.querySelector('.toast-close').addEventListener('click', close);
+  container.appendChild(toast);
+  requestAnimationFrame(() => toast.classList.add('toast-show'));
+
+  const arm = (t) => {
+    const dur = opts.duration ?? (t === 'error' ? 6000 : t === 'loading' ? 0 : 3500);
+    if (dur > 0) timer = setTimeout(close, dur);
+  };
+  arm(type);
+
+  return {
+    dismiss: close,
+    update: (newMsg, newType = type) => {
+      if (timer) { clearTimeout(timer); timer = null; }
+      toast.className = `toast toast-${newType} toast-show`;
+      toast.querySelector('.toast-icon').textContent = icons[newType] ?? icons.info;
+      toast.querySelector('.toast-msg').textContent  = newMsg;
+      arm(newType);
+    },
+  };
+};
+
+/* --- CVE impact classification (mirrors cve_lookup.py; used as fallback) --- */
+const _CVE_TYPE_INFO = {
+  RCE:       { label: 'Remote Code Exec',  cls: 'cve-type-rce'      },
+  DoS:       { label: 'Denial of Service', cls: 'cve-type-dos'      },
+  EscPriv:   { label: 'Privilege Esc',     cls: 'cve-type-escpriv'  },
+  InfoDisc:  { label: 'Info Disclosure',   cls: 'cve-type-infodisc' },
+  XSS:       { label: 'Cross-Site Script', cls: 'cve-type-xss'      },
+  SQLi:      { label: 'SQL Injection',     cls: 'cve-type-sqli'     },
+  Overflow:  { label: 'Memory Overflow',   cls: 'cve-type-overflow' },
+  Bypass:    { label: 'Auth/ACL Bypass',   cls: 'cve-type-bypass'   },
+  Traversal: { label: 'Path Traversal',    cls: 'cve-type-traversal'},
+  UAF:       { label: 'Use-After-Free',    cls: 'cve-type-uaf'      },
+  Corrupt:   { label: 'Memory Corruption', cls: 'cve-type-corrupt'  },
+};
+const _CVE_TYPE_KW = [
+  ['RCE',       ['arbitrary code execution', 'remote code execution', 'code execution', 'execute arbitrary']],
+  ['DoS',       ['denial of service', 'memory exhaustion', 'null pointer', 'infinite loop', 'crash', 'out of memory', 'resource exhaustion']],
+  ['EscPriv',   ['privilege escalation', 'gain root', 'local privilege', 'escalation of privilege', 'gain elevated']],
+  ['InfoDisc',  ['information disclosure', 'sensitive information', 'memory leak', 'data leak', 'information leak', 'uninitialized memory']],
+  ['XSS',       ['cross-site scripting', ' xss', 'html injection', 'script injection']],
+  ['SQLi',      ['sql injection']],
+  ['Overflow',  ['buffer overflow', 'stack overflow', 'heap overflow', 'integer overflow', 'out-of-bounds write', 'stack-based buffer', 'heap-based buffer']],
+  ['Bypass',    ['bypass', 'authentication bypass', 'access control bypass', 'improper authentication']],
+  ['Traversal', ['directory traversal', 'path traversal']],
+  ['UAF',       ['use after free', 'use-after-free']],
+  ['Corrupt',   ['memory corruption', 'heap corruption', 'type confusion']],
+];
+function cveType(c) {
+  if (c.type) return c.type;
+  const t = (c.summary || '').toLowerCase();
+  for (const [label, kws] of _CVE_TYPE_KW) if (kws.some(k => t.includes(k))) return label;
+  return '';
+}
+function cveVector(c) {
+  if (c.vector) return c.vector;
+  const t = (c.summary || '').toLowerCase();
+  const remote = ['remote', 'network', 'unauthenticated', 'internet', 'http', 'web server', 'listening', 'socket', 'tcp', 'udp', 'attacker-controlled'];
+  const local  = ['local user', 'local attacker', 'local access', 'physical access', 'console access', 'authenticated local'];
+  if (remote.some(k => t.includes(k))) return 'REMOTE';
+  if (local.some(k => t.includes(k)))  return 'LOCAL';
+  return '';
+}
+function cveImpactLabel(c) {
+  const info = _CVE_TYPE_INFO[cveType(c)];
+  return info ? info.label : 'Other';
+}
+function _cveBadgesHtml(c) {
+  const info = _CVE_TYPE_INFO[cveType(c)];
+  const vec  = cveVector(c);
+  const parts = [];
+  parts.push(info
+    ? `<span class="cve-type ${info.cls}">${info.label}</span>`
+    : `<span class="cve-type cve-type-bypass">Other</span>`);
+  if (vec) parts.push(`<span class="cve-vector cve-vector-${vec.toLowerCase()}">${vec}</span>`);
+  return `<div class="cve-badges">${parts.join('')}</div>`;
+}
+
 /* --- Nav --- */
 document.querySelectorAll('.nav-item[data-section]').forEach(item => {
   item.addEventListener('click', () => {
@@ -45,6 +146,12 @@ document.querySelectorAll('.nav-item[data-section]').forEach(item => {
         _cveData = { cves: window.__savedData.cves, counts: window.__savedData.counts };
       }
       renderAllCVEs();
+    }
+    if (target === 'section-patches') {
+      if (!_cveData && window.__savedData?.cves?.length > 0) {
+        _cveData = { cves: window.__savedData.cves, counts: window.__savedData.counts };
+      }
+      renderPatches();
     }
     if (target === 'section-apps') {
       _renderAppsToolbar();
@@ -109,18 +216,21 @@ document.querySelectorAll('.filter-chip').forEach(chip => {
 });
 
 function filterCVETable() {
-  const activeSev    = [...document.querySelectorAll('.filter-chip.active')].map(c => c.dataset.sev);
+  const activeChips  = [...document.querySelectorAll('.filter-chip.active')];
+  const activeSev    = activeChips.filter(c => c.dataset.sev).map(c => c.dataset.sev);
+  const activeType   = activeChips.filter(c => c.dataset.type).map(c => c.dataset.type);
   const activeDevice = document.querySelector('#cve-dev-chips .sec-dev-chip.active')?.dataset.device ?? '';
   const search       = (document.getElementById('cve-search')?.value ?? '').trim().toLowerCase();
 
   document.querySelectorAll('.cve-row').forEach(row => {
     const sevOk    = activeSev.length === 0 || activeSev.includes(row.dataset.severity);
+    const typeOk   = activeType.length === 0 || activeType.includes(row.dataset.type);
     const devOk    = !activeDevice || row.dataset.device === activeDevice;
     const searchOk = !search ||
       (row.dataset.cveId  ?? '').toLowerCase().includes(search) ||
       (row.dataset.cvePkg ?? '').toLowerCase().includes(search);
 
-    const visible = sevOk && devOk && searchOk;
+    const visible = sevOk && typeOk && devOk && searchOk;
     row.style.display = visible ? '' : 'none';
     // keep detail row in sync
     const next = row.nextElementSibling;
@@ -324,6 +434,7 @@ async function runCVEAnalysis(report) {
           id: c.id, package: c.package, installed: c.installed ?? '',
           fixed: c.fixed ?? '', severity: c.severity, cvss: c.cvss ?? null,
           summary: (c.summary ?? '').slice(0, 400), url: c.url ?? '',
+          type: c.type ?? '', vector: c.vector ?? '',
         })),
         topology: topoData,
       });
@@ -827,6 +938,7 @@ function populateCVEs(cves, counts) {
 
   // Full multi-device CVE table render
   renderAllCVEs();
+  _updatePatchBadge();
 
   // Flag vulnerable packages in the app grid
   if (cves.length > 0) {
@@ -938,8 +1050,9 @@ function renderAllCVEs() {
     });
   }
 
-  // Show/hide toolbar and device column
+  // Show/hide toolbar, impact filter, and device column
   document.getElementById('cve-toolbar')?.classList.remove('hidden');
+  document.getElementById('cve-type-filter-bar')?.classList.remove('hidden');
   document.getElementById('cve-main-table')?.classList.toggle('hide-device-col', !multiDevice);
 
   // Wire search
@@ -964,7 +1077,7 @@ function renderAllCVEs() {
   if (!tbody) return;
 
   if (allRows.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="8"><div class="empty-state">
+    tbody.innerHTML = `<tr><td colspan="9"><div class="empty-state">
       <div class="empty-icon" style="color:var(--sev-low)">✓</div>
       <div>No known vulnerabilities found for installed packages.</div>
     </div></td></tr>`;
@@ -975,8 +1088,10 @@ function renderAllCVEs() {
     const sev   = c.severity || 'unknown';
     const score = c.cvss != null ? Number(c.cvss).toFixed(1) : '—';
     const tag   = window.__deviceTags?.[c._device] || c._device;
+    const ty    = cveType(c);
     return `
       <tr class="cve-row" data-severity="${sev}" data-device="${escapeHtml(c._device)}"
+          data-type="${escapeHtml(ty)}"
           data-cve-id="${escapeHtml(c.id)}"
           data-cve-pkg="${escapeHtml(c.package)}"
           data-cve-installed="${escapeHtml(c.installed ?? '')}"
@@ -991,6 +1106,7 @@ function renderAllCVEs() {
         <td class="mono" style="font-size:11px;color:var(--sev-low)">${escapeHtml(c.fixed ?? '—')}</td>
         <td class="cvss-score cvss-${sev}">${score}</td>
         <td><span class="badge badge-${sev}">${sev}</span></td>
+        <td>${_cveBadgesHtml(c)}</td>
         <td class="cve-actions"><button class="btn btn-ghost btn-sm cve-expand-btn">Details</button></td>
       </tr>`;
   }).join('');
@@ -1011,6 +1127,8 @@ function _wireCVEExpand(tbody) {
       const d      = row.dataset;
       const cveId  = d.cveId || '';
       const summary = d.cveSummary || 'No description available.';
+      const impact = cveImpactLabel({ type: d.type, summary });
+      const vector = cveVector({ summary });
       const isCVE  = cveId.startsWith('CVE-');
       const isASA  = cveId.startsWith('ASA-');
       const nvdUrl  = isCVE ? `https://nvd.nist.gov/vuln/detail/${cveId}` : '';
@@ -1022,7 +1140,7 @@ function _wireCVEExpand(tbody) {
       const detail = document.createElement('tr');
       detail.className = 'cve-detail-row';
       detail.innerHTML = `
-        <td colspan="8" class="cve-detail-cell">
+        <td colspan="9" class="cve-detail-cell">
           <div class="cve-detail-body">
             <p class="cve-detail-summary">${escapeHtml(summary)}</p>
             <div class="cve-detail-meta">
@@ -1031,6 +1149,8 @@ function _wireCVEExpand(tbody) {
               <span>Installed <code>${escapeHtml(d.cveInstalled) || '—'}</code></span>
               <span>Fixed in <code class="text-ok">${escapeHtml(d.cveFixed) || 'no fix yet'}</code></span>
               <span>CVSS <code>${escapeHtml(d.cveCvss)}</code></span>
+              <span>Impact <code>${escapeHtml(impact)}</code></span>
+              ${vector ? `<span>Vector <code>${escapeHtml(vector)}</code></span>` : ''}
             </div>
             <div class="cve-detail-actions">
               ${nvdUrl  ? `<a href="${nvdUrl}"  target="_blank" rel="noopener" class="btn btn-ghost btn-sm">NVD ↗</a>` : ''}
@@ -1040,7 +1160,11 @@ function _wireCVEExpand(tbody) {
                 onclick="navigator.clipboard.writeText('${escapeHtml(cveId)}').then(()=>{this.textContent='Copied!';setTimeout(()=>this.textContent='Copy ID',1500)})">
                 Copy ID
               </button>
-              <button class="btn btn-primary btn-sm" style="margin-left:auto"
+              <button class="btn btn-success btn-sm" style="margin-left:auto"
+                onclick="window.__gotoPatch('${escapeHtml(d.cvePkg)}','${escapeHtml(cveId)}')">
+                🛠 Patch this →
+              </button>
+              <button class="btn btn-primary btn-sm"
                 onclick="window.askAICVE?.('${escapeHtml(cveId)}','${escapeHtml(d.cvePkg)}','${escapeHtml(d.cveInstalled)}','${escapeHtml(d.cveFixed)}','${escapeHtml(row.dataset.severity)}','${escapeHtml(summary)}')">
                 🤖 Ask AI
               </button>
@@ -1065,6 +1189,273 @@ window._setCVEDeviceFilter = function(hostname) {
   });
   filterCVETable();
 };
+
+/* =========================================================
+   PATCHES — remediation to-do list + inline AI
+   ========================================================= */
+
+function _patchContext() {
+  if (_cveData?.cves?.length)
+    return { cves: _cveData.cves,
+             host:   _lastReport?.os?.hostname    || window.__savedData?.hostname     || 'this device',
+             family: _lastReport?.distro_family   || window.__savedData?.distro_family || 'unknown' };
+  if (window.__savedData?.cves?.length)
+    return { cves: window.__savedData.cves,
+             host:   window.__savedData.hostname     || 'this device',
+             family: window.__savedData.distro_family || 'unknown' };
+  return { cves: [], host: 'this device', family: 'unknown' };
+}
+
+function _patchCmd(family, pkg) {
+  return {
+    arch:   `sudo pacman -Syu ${pkg}`,
+    debian: `sudo apt-get install --only-upgrade ${pkg}`,
+    rhel:   `sudo dnf update ${pkg}`,
+  }[family] ?? `# upgrade ${pkg} with your package manager`;
+}
+
+function _patchDoneSet(host) {
+  try { return new Set(JSON.parse(localStorage.getItem('patch_done_' + host) || '[]')); }
+  catch { return new Set(); }
+}
+function _savePatchDone(host, set) {
+  localStorage.setItem('patch_done_' + host, JSON.stringify([...set]));
+}
+
+// Group a device's CVEs by package → one patch task per vulnerable package
+function _groupPatches(cves) {
+  const map = new Map();
+  for (const c of cves) {
+    const key = c.package || '(unknown)';
+    if (!map.has(key))
+      map.set(key, { pkg: key, installed: c.installed || '?', fixed: c.fixed || '', cves: [] });
+    const g = map.get(key);
+    g.cves.push(c);
+    if ((!g.fixed || g.fixed === '?') && c.fixed && c.fixed !== '?') g.fixed = c.fixed;
+  }
+  const worst = g => g.cves.reduce((w, c) => Math.min(w, _sevOrder(c.severity)), 4);
+  return [...map.values()].sort((a, b) => {
+    const s = worst(a) - worst(b);
+    return s !== 0 ? s : b.cves.length - a.cves.length;
+  });
+}
+
+function _worstSev(cves) {
+  const order = ['critical', 'high', 'medium', 'low', 'unknown'];
+  return order[cves.reduce((w, c) => Math.min(w, _sevOrder(c.severity)), 4)];
+}
+
+function renderPatches() {
+  const list = document.getElementById('patch-list');
+  const bar  = document.getElementById('patch-summary-bar');
+  if (!list) return;
+
+  const { cves, host, family } = _patchContext();
+  const groups = _groupPatches(cves);
+  const done   = _patchDoneSet(host);
+
+  if (groups.length === 0) {
+    if (bar) bar.style.display = 'none';
+    list.innerHTML = `<div class="empty-state">
+      <div class="empty-icon" style="color:var(--sev-low)">✓</div>
+      <div>No vulnerable packages — nothing to patch on <strong>${escapeHtml(host)}</strong>.</div>
+    </div>`;
+    _updatePatchBadge();
+    return;
+  }
+
+  const totalCVEs = cves.length;
+  const doneCount = groups.filter(g => done.has(g.pkg)).length;
+  const crit = cves.filter(c => c.severity === 'critical').length;
+  const high = cves.filter(c => c.severity === 'high').length;
+  const pct  = Math.round((doneCount / groups.length) * 100);
+
+  if (bar) {
+    bar.style.display = 'flex';
+    bar.innerHTML = `
+      <div><div class="patch-summary-num text-accent">${groups.length}</div><div class="patch-summary-label">packages to patch</div></div>
+      <div class="patch-summary-div"></div>
+      <div><div class="patch-summary-num">${totalCVEs}</div><div class="patch-summary-label">CVEs covered</div></div>
+      <div class="patch-summary-div"></div>
+      <div><div class="patch-summary-num cvss-critical">${crit}</div><div class="patch-summary-label">critical</div></div>
+      <div><div class="patch-summary-num cvss-high">${high}</div><div class="patch-summary-label">high</div></div>
+      <div class="patch-summary-div"></div>
+      <div style="flex:1">
+        <div class="patch-progress-track"><div class="patch-progress-fill" style="width:${pct}%"></div></div>
+        <div class="patch-summary-label" style="margin-top:4px">${doneCount} of ${groups.length} resolved · ${pct}%</div>
+      </div>
+      <div><div class="patch-summary-num" style="color:var(--sev-low)">${pct}%</div><div class="patch-summary-label">done</div></div>`;
+  }
+
+  const hideDone = document.getElementById('patch-hide-done')?.checked;
+
+  list.innerHTML = groups.map(g => {
+    const isDone = done.has(g.pkg);
+    if (isDone && hideDone) return '';
+    const sev   = _worstSev(g.cves);
+    const cmd   = _patchCmd(family, g.pkg);
+    const chips = g.cves.map(c => {
+      const ty = cveType(c);
+      const info = _CVE_TYPE_INFO[ty];
+      return `<span class="patch-cve-chip">
+        <span class="badge badge-${c.severity}" style="padding:0 5px">${c.severity[0].toUpperCase()}</span>
+        ${escapeHtml(c.id)}${info ? ` · <span style="opacity:.8">${info.label}</span>` : ''}
+      </span>`;
+    }).join('');
+    return `
+      <div class="patch-item${isDone ? ' patch-done' : ''}" data-patch-pkg="${escapeHtml(g.pkg)}">
+        <div class="patch-header">
+          <label class="patch-check"><input type="checkbox" class="patch-done-cb" ${isDone ? 'checked' : ''}></label>
+          <span class="patch-pkg-name">${escapeHtml(g.pkg)}</span>
+          <span class="badge badge-${sev}">${sev}</span>
+          <span class="patch-count">${g.cves.length} CVE${g.cves.length !== 1 ? 's' : ''}</span>
+          <span class="patch-fix-ver">${g.fixed && g.fixed !== '?'
+            ? `fix → <code class="text-ok">${escapeHtml(g.fixed)}</code>` : '<span class="text-muted">no fixed version</span>'}</span>
+        </div>
+        <div class="patch-cve-list">${chips}</div>
+        <div class="patch-cmd-block">
+          <code>${escapeHtml(cmd)}</code>
+          <button class="btn btn-ghost btn-sm patch-copy-btn" data-cmd="${escapeHtml(cmd)}">Copy</button>
+        </div>
+        <div class="patch-ai-output" style="display:none"></div>
+        <div class="patch-actions">
+          <button class="btn btn-primary btn-sm patch-ai-btn">🤖 Ask AI to patch</button>
+          <button class="btn btn-success btn-sm patch-toggle-btn" style="margin-left:auto">
+            ${isDone ? 'Mark as not done' : '✓ Mark as patched'}
+          </button>
+        </div>
+      </div>`;
+  }).join('') || `<div class="empty-state"><div class="empty-icon" style="color:var(--sev-low)">✓</div>
+      <div>All patch tasks are marked done. Uncheck “Hide done” to review them.</div></div>`;
+
+  _wirePatchItems(list, host, family);
+  _updatePatchBadge();
+}
+
+function _wirePatchItems(list, host, family) {
+  // Copy command
+  list.querySelectorAll('.patch-copy-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      navigator.clipboard.writeText(btn.dataset.cmd).then(() => {
+        showToast('Patch command copied to clipboard', 'success');
+        btn.textContent = 'Copied!';
+        setTimeout(() => (btn.textContent = 'Copy'), 1500);
+      });
+    });
+  });
+
+  // Mark done / undo (button + checkbox stay in sync)
+  const setDone = (pkg, val) => {
+    const set = _patchDoneSet(host);
+    val ? set.add(pkg) : set.delete(pkg);
+    _savePatchDone(host, set);
+    showToast(val ? `Marked ${pkg} as patched` : `Reopened ${pkg}`, val ? 'success' : 'info');
+    renderPatches();
+  };
+  list.querySelectorAll('.patch-item').forEach(item => {
+    const pkg = item.dataset.patchPkg;
+    item.querySelector('.patch-toggle-btn')?.addEventListener('click',
+      () => setDone(pkg, !_patchDoneSet(host).has(pkg)));
+    item.querySelector('.patch-done-cb')?.addEventListener('change',
+      e => setDone(pkg, e.target.checked));
+    item.querySelector('.patch-ai-btn')?.addEventListener('click',
+      () => _aiPatchPackage(pkg, host, family));
+  });
+}
+
+async function _aiPatchPackage(pkg, host, family) {
+  const item = document.querySelector(`.patch-item[data-patch-pkg="${CSS.escape(pkg)}"]`);
+  if (!item) return;
+  const out = item.querySelector('.patch-ai-output');
+  const btn = item.querySelector('.patch-ai-btn');
+  const { cves } = _patchContext();
+  const pkgCves = cves.filter(c => (c.package || '(unknown)') === pkg);
+
+  out.style.display = 'block';
+  out.innerHTML = `<div class="patch-ai-loading"><span class="scan-spinner" style="width:16px;height:16px"></span> J.A.R.V.I.S. is drafting a remediation plan…</div>`;
+  if (btn) btn.disabled = true;
+  const toast = showToast(`Generating patch plan for ${pkg}…`, 'loading');
+
+  const cveLines = pkgCves.map(c =>
+    `  - ${c.id} (${c.severity}, ${cveImpactLabel(c)}): ${(c.summary || '').slice(0, 120)}`).join('\n');
+  const cmd = _patchCmd(family, pkg);
+  const prompt =
+    `You are a Linux security engineer. Give a concise remediation for ONE package on a ${family} system (host ${host}).\n\n` +
+    `Package: ${pkg}\nInstalled: ${pkgCves[0]?.installed ?? '?'}  Fixed in: ${pkgCves[0]?.fixed ?? '?'}\n` +
+    `CVEs (${pkgCves.length}):\n${cveLines}\n\n` +
+    `Suggested upgrade command: ${cmd}\n\n` +
+    `Respond in EXACTLY this structure, terse and practical, under 160 words, no preamble:\n` +
+    `**Risk:** one sentence on real-world impact.\n` +
+    `**Fix:** the exact shell commands (in a \`\`\`bash code block\`\`\`). Prefer upgrading to the fixed version.\n` +
+    `**If you can't patch now:** one or two mitigations.`;
+
+  try {
+    const res = await fetch('/api/ai/complete', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messages: [{ role: 'user', content: prompt }], temperature: 0.3, max_tokens: 600 }),
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || 'AI request failed');
+    out.innerHTML = `<div class="patch-ai-head">🤖 Remediation plan</div>
+      <div class="patch-ai-body">${_mdLite(data.text || 'No response.')}</div>`;
+    toast.update(`Patch plan ready for ${pkg}`, 'success');
+  } catch (err) {
+    out.innerHTML = `<div class="patch-ai-body" style="color:var(--sev-critical)">AI request failed: ${escapeHtml(err.message)}</div>`;
+    toast.update(`Couldn't generate plan for ${pkg}`, 'error');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+// Minimal, safe markdown → HTML (escapes first, then re-applies a few tokens)
+function _mdLite(text) {
+  let h = escapeHtml(text);
+  h = h.replace(/```(?:\w+)?\n?([\s\S]*?)```/g,
+    (_, code) => `<pre class="patch-ai-pre"><code>${code.replace(/\n+$/, '')}</code></pre>`);
+  h = h.replace(/`([^`]+)`/g, '<code>$1</code>');
+  h = h.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  h = h.replace(/^\s*[-*]\s+(.*)$/gm, '• $1');
+  return h.replace(/\n/g, '<br>');
+}
+
+function _updatePatchBadge() {
+  const { cves, host } = _patchContext();
+  const groups = _groupPatches(cves);
+  const done   = _patchDoneSet(host);
+  const open   = groups.filter(g => !done.has(g.pkg)).length;
+  const badge  = document.getElementById('nav-patch-badge');
+  if (badge) {
+    badge.textContent = open;
+    badge.classList.toggle('hidden', open === 0);
+  }
+}
+window.__updatePatchBadge = _updatePatchBadge;
+
+// Deep-link from a CVE row: jump to Patches, focus the package, run AI
+window.__gotoPatch = function (pkg, cveId) {
+  const nav = document.querySelector('.nav-item[data-section="section-patches"]');
+  if (nav) nav.click();
+  setTimeout(() => {
+    const item = document.querySelector(`.patch-item[data-patch-pkg="${CSS.escape(pkg)}"]`);
+    if (!item) { showToast(`No patch task found for ${pkg}`, 'warning'); return; }
+    item.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    item.classList.add('patch-flash');
+    setTimeout(() => item.classList.remove('patch-flash'), 1600);
+    const { host, family } = _patchContext();
+    _aiPatchPackage(pkg, host, family);
+  }, 120);
+};
+
+// Wire the Patches toolbar controls once
+(function _wirePatchToolbar() {
+  document.getElementById('patch-reset-btn')?.addEventListener('click', () => {
+    const { host } = _patchContext();
+    localStorage.removeItem('patch_done_' + host);
+    showToast('Patch progress reset', 'info');
+    renderPatches();
+  });
+  document.getElementById('patch-hide-done')?.addEventListener('change', renderPatches);
+})();
 
 /* --- Helpers --- */
 
