@@ -1,4 +1,4 @@
-"""CVE lookup for Oasis Scan — no AI, pure data sources.
+"""CVE lookup for Scan Oasis — no AI, pure data sources.
 
 Sources:
   Arch Linux     : https://security.archlinux.org/json  (full advisory list)

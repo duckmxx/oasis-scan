@@ -1,4 +1,4 @@
-"""Oasis Scan — Desktop GUI
+"""Scan Oasis — Desktop GUI
 
 Requires: sudo pacman -S tk   (Arch Linux)
 Run:      python gui.py
@@ -39,13 +39,31 @@ SCAN_STEPS = [
     "Syncing to cloud…",
 ]
 
+# Continuous monitoring — seconds between automatic re-scans
+SCAN_INTERVAL_SEC = 5 * 60
+
+_LOGO_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "img")
+_logo_cache: dict = {}
+
+
+def _logo(size: int):
+    """Load and cache the Scan Oasis logo PNG at the given size (None if unavailable)."""
+    if size in _logo_cache:
+        return _logo_cache[size]
+    try:
+        img = tk.PhotoImage(file=os.path.join(_LOGO_DIR, f"logo-{size}.png"))
+    except Exception:
+        return None
+    _logo_cache[size] = img
+    return img
+
 
 # ── Root window ───────────────────────────────────────────────────────────────
 
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("Oasis Scan")
+        self.title("Scan Oasis")
         self.configure(bg=BG)
         self.resizable(False, False)
         self.protocol("WM_DELETE_WINDOW", self.destroy)
@@ -79,9 +97,15 @@ class LoginFrame(tk.Frame):
         # ── Logo ──────────────────────────────────────────────────────────────
         top = tk.Frame(self, bg=BG)
         top.pack(pady=(36, 0))
-        tk.Label(top, text="⬡", font=("Inter", 38),
-                 bg=BG, fg=ACCENT).pack()
-        tk.Label(top, text="Oasis Scan", font=("Inter", 21, "bold"),
+        logo = _logo(48)
+        if logo:
+            lg = tk.Label(top, image=logo, bg=BG)
+            lg.image = logo
+            lg.pack()
+        else:
+            tk.Label(top, text="⬡", font=("Inter", 38),
+                     bg=BG, fg=ACCENT).pack()
+        tk.Label(top, text="Scan Oasis", font=("Inter", 21, "bold"),
                  bg=BG, fg=TEXT).pack(pady=(3, 0))
         tk.Label(top, text="Sign in to your account",
                  font=("Inter", 10), bg=BG, fg=TSEC).pack(pady=(3, 0))
@@ -226,7 +250,7 @@ class ScanFrame(tk.Frame):
         self._cv.pack()
 
         # Title + step label
-        tk.Label(center, text="Running Oasis Scan",
+        tk.Label(center, text="Running Scan Oasis",
                  font=("Inter", 15, "bold"), bg=BG, fg=TEXT, pady=16).pack()
         self._step_lbl = tk.Label(center, text=SCAN_STEPS[0],
                                    font=("JetBrains Mono", 9),
@@ -289,7 +313,9 @@ class ResultFrame(tk.Frame):
         super().__init__(master, bg=BG)
         self._r     = report
         self._email = email
+        self._remaining = SCAN_INTERVAL_SEC
         self._build()
+        self._tick_countdown()
 
     def _build(self):
         bar = _topbar(self, subtitle=self._email)
@@ -386,11 +412,32 @@ class ResultFrame(tk.Frame):
                  if v and not v.lower().startswith(("not affected", "mitigation"))]
         row("CPU Vulns",  f"{len(bad)} unmitigated / {len(vulns)} total")
 
-        # Rescan button
+        # Continuous monitoring — countdown to the next automatic scan
         tk.Frame(p, bg=BG, height=12).pack()
-        Btn(p, "Run Another Scan",
+        mon = tk.Frame(p, bg=CARD, highlightbackground=BORDA, highlightthickness=1)
+        mon.pack(padx=20, pady=(0, 10), fill="x")
+        mrow = tk.Frame(mon, bg=CARD)
+        mrow.pack(padx=14, pady=10, fill="x")
+        tk.Label(mrow, text="● Continuous monitoring", font=("Inter", 9),
+                 bg=CARD, fg=OK).pack(side="left")
+        self._countdown_lbl = tk.Label(mrow, text="Next scan in 5:00",
+                                       font=("JetBrains Mono", 9), bg=CARD, fg=ACCENT)
+        self._countdown_lbl.pack(side="right")
+
+        Btn(p, "Scan Now",
             lambda: self.master._switch(ScanFrame, self._email)
         ).pack(padx=20, pady=(0, 24), fill="x")
+
+    def _tick_countdown(self):
+        if not self.winfo_exists() or not self._countdown_lbl.winfo_exists():
+            return
+        m, s = divmod(max(self._remaining, 0), 60)
+        self._countdown_lbl.config(text=f"Next scan in {m}:{s:02d}")
+        if self._remaining <= 0:
+            self.master._switch(ScanFrame, self._email)   # auto re-scan
+            return
+        self._remaining -= 1
+        self.after(1000, self._tick_countdown)
 
 
 # ── Shared top-bar ────────────────────────────────────────────────────────────
@@ -404,7 +451,12 @@ def _topbar(parent: tk.Frame, subtitle: str = "") -> tk.Frame:
 
     left = tk.Frame(inner, bg=PANEL)
     left.pack(side="left", fill="x", expand=True)
-    tk.Label(left, text="⬡  Oasis Scan", font=("Inter", 12, "bold"),
+    logo = _logo(22)
+    if logo:
+        lg = tk.Label(left, image=logo, bg=PANEL)
+        lg.image = logo
+        lg.pack(side="left", padx=(0, 8))
+    tk.Label(left, text="Scan Oasis", font=("Inter", 12, "bold"),
              bg=PANEL, fg=TEXT).pack(side="left")
     if subtitle:
         tk.Label(left, text=subtitle, font=("Inter", 9),

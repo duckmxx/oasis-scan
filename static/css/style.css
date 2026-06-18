@@ -1,5 +1,5 @@
 /* =========================================================
-   Oasis Scan — Main Stylesheet
+   Scan Oasis — Main Stylesheet
    ========================================================= */
 
 /* --- Variables --- */
@@ -86,15 +86,11 @@ ul { list-style: none; }
 }
 
 .sidebar-logo .logo-icon {
-  width: 32px;
-  height: 32px;
-  background: linear-gradient(135deg, var(--accent), #0055aa);
-  border-radius: var(--radius-sm);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 16px;
+  width: 34px;
+  height: 34px;
+  object-fit: contain;
   flex-shrink: 0;
+  filter: drop-shadow(0 0 6px var(--accent-glow));
 }
 
 .sidebar-logo .logo-text {
@@ -261,6 +257,53 @@ ul { list-style: none; }
 .status-dot.idle { background: var(--text-muted); box-shadow: none; animation: none; }
 .status-dot.scanning { background: var(--accent); box-shadow: 0 0 6px var(--accent); }
 .status-dot.error { background: var(--sev-critical); box-shadow: 0 0 6px var(--sev-critical); }
+
+/* --- Continuous-monitoring countdown chip --- */
+.monitor-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+
+.monitor-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--sev-low);
+  box-shadow: 0 0 6px var(--sev-low);
+  animation: pulse 2s infinite;
+  flex-shrink: 0;
+}
+
+.monitor-label { color: var(--text-muted); }
+
+.monitor-count {
+  color: var(--accent);
+  font-weight: 700;
+  min-width: 38px;
+  text-align: right;
+}
+
+.monitor-chip.scanning .monitor-count { color: var(--text-muted); }
+
+.monitor-select {
+  background: var(--bg-panel);
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  font-family: var(--font-sans);
+  padding: 2px 4px;
+  cursor: pointer;
+  outline: none;
+}
+.monitor-select:hover { border-color: var(--border-accent); }
 
 @keyframes pulse {
   0%, 100% { opacity: 1; }

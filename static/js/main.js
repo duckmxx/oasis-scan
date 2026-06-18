@@ -1,5 +1,5 @@
 /* =========================================================
-   Oasis Scan — Frontend JS
+   Scan Oasis — Frontend JS
    ========================================================= */
 
 // Module-level refs kept so runCVEAnalysis() can update the status bar
@@ -141,7 +141,56 @@ async function startScan() {
   // Both checks run in parallel after the overlay closes
   runCVEAnalysis(_lastReport);
   runIntegrityCheck(_lastReport);
+
+  // Continuous monitoring: schedule the next automatic scan
+  scheduleNextScan();
 }
+
+/* --- Continuous monitoring (auto-rescan + countdown) --- */
+
+let _scanIntervalMs = 5 * 60 * 1000;   // default: every 5 minutes
+let _nextScanAt     = 0;
+let _countdownTimer = null;
+
+function scheduleNextScan() {
+  _nextScanAt = Date.now() + _scanIntervalMs;
+  if (_countdownTimer) clearInterval(_countdownTimer);
+  _countdownTimer = setInterval(tickCountdown, 1000);
+  tickCountdown();
+}
+
+function tickCountdown() {
+  const el   = document.getElementById('next-scan-countdown');
+  const chip = document.getElementById('monitor-chip');
+  if (startScan._running) {
+    if (chip) chip.classList.add('scanning');
+    if (el)   el.textContent = 'now…';
+    return;
+  }
+  if (chip) chip.classList.remove('scanning');
+
+  const remaining = _nextScanAt - Date.now();
+  if (remaining <= 0) {
+    if (el) el.textContent = 'now…';
+    clearInterval(_countdownTimer);
+    _countdownTimer = null;
+    startScan();              // re-runs the scan; scheduleNextScan() fires again on success
+    return;
+  }
+  if (el) el.textContent = fmtCountdown(remaining);
+}
+
+function fmtCountdown(ms) {
+  const s = Math.ceil(ms / 1000);
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
+
+// Interval selector — change the monitoring frequency on the fly
+document.getElementById('scan-interval')?.addEventListener('change', e => {
+  _scanIntervalMs = Number(e.target.value) || _scanIntervalMs;
+  // Re-anchor the countdown to the new interval without forcing an immediate scan
+  if (!startScan._running) scheduleNextScan();
+});
 
 /* --- CVE Analysis (runs after scan overlay closes) --- */
 
@@ -1295,7 +1344,7 @@ function buildAttackNarrative(topo, cveData) {
     if (neighbors.length > 0) {
       html.push(
         `${neighbors.length} neighbor device${neighbors.length !== 1 ? 's are' : ' is'} visible on the network. ` +
-        `Run Oasis Scan on those machines to check their CVE posture — ` +
+        `Run Scan Oasis on those machines to check their CVE posture — ` +
         `a vulnerable neighbor could pivot <em>into</em> this device laterally.`
       );
     }

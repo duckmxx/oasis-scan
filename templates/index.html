@@ -3,7 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Oasis Scan — Security Dashboard</title>
+  <title>Scan Oasis — Security Dashboard</title>
+  <link rel="icon" type="image/png" href="/static/img/favicon.png" />
   <link rel="stylesheet" href="/static/css/style.css" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600;700&display=swap" />
@@ -16,8 +17,8 @@
        ===================================================== -->
   <aside id="sidebar">
     <div class="sidebar-logo">
-      <div class="logo-icon">⬡</div>
-      <div class="logo-text"><span>Oasis</span> Scan</div>
+      <img class="logo-icon" src="/static/img/logo.png" alt="Scan Oasis" />
+      <div class="logo-text"><span>Scan</span> Oasis</div>
     </div>
 
     <p class="sidebar-section-label">Scan</p>
@@ -59,7 +60,8 @@
     </div>
 
     <div class="sidebar-footer" id="sidebar-last-scan">
-      Last scan: <span class="text-accent mono" id="last-scan-time">—</span>
+      <div><span class="monitor-dot"></span> Continuous monitoring</div>
+      <div style="margin-top:6px">Last scan: <span class="text-accent mono" id="last-scan-time">—</span></div>
     </div>
   </aside>
 
@@ -69,6 +71,17 @@
   <header id="topbar">
     <span class="topbar-title" id="topbar-section-label">System Overview</span>
     <div class="topbar-right">
+      <div class="monitor-chip" id="monitor-chip" title="Continuous monitoring — next automatic scan">
+        <span class="monitor-dot"></span>
+        <span class="monitor-label">Next scan</span>
+        <span class="mono monitor-count" id="next-scan-countdown">—</span>
+        <select id="scan-interval" class="monitor-select" title="Scan frequency">
+          <option value="60000">every 1m</option>
+          <option value="300000" selected>every 5m</option>
+          <option value="900000">every 15m</option>
+          <option value="3600000">every 1h</option>
+        </select>
+      </div>
       <div class="topbar-status">
         <div class="status-dot idle" id="status-dot"></div>
         <span id="status-label">Idle</span>
@@ -431,7 +444,7 @@
   <div id="scan-overlay">
     <div class="scan-modal">
       <div class="scan-spinner"></div>
-      <div class="scan-label">Running Oasis Scan…</div>
+      <div class="scan-label">Running Scan Oasis…</div>
       <div class="scan-step" id="scan-step-label">Collecting system info…</div>
     </div>
   </div>

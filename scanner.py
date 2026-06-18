@@ -493,7 +493,7 @@ def firestore_save(id_token, uid, report):
 
 
 def prompt_login():
-    print("\n── Oasis Scan ─────────────────────────────")
+    print("\n── Scan Oasis ─────────────────────────────")
     print("  Sign in to sync results to your account")
     print("───────────────────────────────────────────")
     email    = input("  Email   : ").strip()

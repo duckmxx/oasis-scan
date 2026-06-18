@@ -1,4 +1,4 @@
-"""Package integrity checks for Oasis Scan.
+"""Package integrity checks for Scan Oasis.
 
 Three checks, no AI required:
 

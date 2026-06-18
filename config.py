@@ -1,4 +1,4 @@
-# Oasis Scan — Firebase Configuration
+# Scan Oasis — Firebase Configuration
 # Edit this file to point at your own Firebase project.
 # Alternatively, set environment variables with the same names.
 

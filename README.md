@@ -1,12 +1,12 @@
-# Oasis Scan
+# Scan Oasis
 
-Oasis Scan is a cross-platform security and asset visibility platform designed to provide continuous insight into endpoint health, hardware inventory, network exposure, and security vulnerabilities across an organization.
+Scan Oasis is a cross-platform security and asset visibility platform designed to provide continuous insight into endpoint health, hardware inventory, network exposure, and security vulnerabilities across an organization.
 
 ## Features
 
 ### Hardware & System Inventory
 
-Oasis Scan automatically collects detailed information about managed endpoints, including:
+Scan Oasis automatically collects detailed information about managed endpoints, including:
 
 * CPU and processor details
 * Memory configuration and utilization
@@ -37,7 +37,7 @@ Collected data includes:
 
 ### Network Discovery
 
-Oasis Scan can identify and map devices within managed environments to provide visibility into:
+Scan Oasis can identify and map devices within managed environments to provide visibility into:
 
 * Connected endpoints
 * Servers
@@ -70,7 +70,7 @@ The dashboard includes a dynamic topology view that displays:
 
 ## Agentic Vulnerability Mitigation
 
-Oasis Scan introduces a three-tier remediation system designed to reduce administrative workload.
+Scan Oasis introduces a three-tier remediation system designed to reduce administrative workload.
 
 ### Level 1 — Automated Configuration Remediation
 
@@ -85,7 +85,7 @@ Examples:
 
 ### Level 2 — Guided Remediation
 
-For issues requiring human approval, Oasis Scan provides step-by-step remediation guidance.
+For issues requiring human approval, Scan Oasis provides step-by-step remediation guidance.
 
 Examples:
 
@@ -96,7 +96,7 @@ Examples:
 
 ### Level 3 — Strategic Recommendations
 
-When vulnerabilities stem from aging, unsupported, or failing hardware, Oasis Scan provides strategic recommendations.
+When vulnerabilities stem from aging, unsupported, or failing hardware, Scan Oasis provides strategic recommendations.
 
 Examples:
 
