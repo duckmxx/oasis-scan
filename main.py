@@ -14,9 +14,7 @@ try:
     _TTS_OK = True
 except ImportError:
     _TTS_OK = False
-from scanner import scan as run_scan
 from cve_lookup import lookup_cves
-from integrity_check import run_integrity
 from patchability import assess_patchability
 from config import (
     FIREBASE_API_KEY, FIREBASE_AUTH_DOMAIN, FIREBASE_PROJECT,
@@ -53,13 +51,11 @@ def status():
     return flask.jsonify({"status": "ok"})
 
 
-@app.route("/api/scan", methods=["POST"])
-def api_scan():
-    try:
-        report = run_scan()
-        return flask.jsonify({"ok": True, "report": report})
-    except Exception as e:
-        return flask.jsonify({"ok": False, "error": str(e)}), 500
+# NOTE: host scanning has been removed from the server. In production this app
+# runs on a DigitalOcean droplet and must never scan the machine it runs on.
+# All device/scan data is collected by the desktop agents (gui.py) and synced to
+# Firestore; this server only serves the dashboard, proxies AI/TTS, and manages
+# agent tokens. (Former endpoints: /api/scan, /api/integrity.)
 
 
 @app.route("/api/analyze", methods=["POST"])
@@ -84,16 +80,6 @@ def api_patchability():
         report = body.get("report") or {}
         cves   = body.get("cves") or []
         return flask.jsonify({"ok": True, "packages": assess_patchability(report, cves)})
-    except Exception as e:
-        return flask.jsonify({"ok": False, "error": str(e)}), 500
-
-
-@app.route("/api/integrity", methods=["POST"])
-def api_integrity():
-    try:
-        report = flask.request.get_json(force=True) or {}
-        result = run_integrity(report)
-        return flask.jsonify({"ok": True, **result})
     except Exception as e:
         return flask.jsonify({"ok": False, "error": str(e)}), 500
 

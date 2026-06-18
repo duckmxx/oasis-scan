@@ -260,74 +260,14 @@ function filterCVETable() {
 
 /* --- Scan --- */
 
+// Host scanning is DISABLED in production: this dashboard runs on a server and
+// must never scan the machine it runs on. All device/scan data is collected by
+// the desktop agents (gui.py) and synced via Firestore — the dashboard only
+// reads and displays it. Kept as a no-op so existing callers/buttons are safe.
 async function startScan(opts = {}) {
-  if (startScan._running) return;
-  startScan._running = true;
-  _dot       = document.getElementById('status-dot');
-  _statusLbl = document.getElementById('status-label');
-
-  // Background mode (initial auto-scan): no full-screen overlay, so cached data
-  // stays visible and the dashboard feels instant; the scan refreshes in place.
-  const background = opts.background === true;
-  const overlay   = background ? null : document.getElementById('scan-overlay');
-  const stepLabel = document.getElementById('scan-step-label');
-  const scanBtn   = document.getElementById('scan-btn');
-
-  if (overlay)   overlay.style.display = 'flex';
-  if (_dot)      _dot.className = 'status-dot scanning';
-  if (_statusLbl) _statusLbl.textContent = background ? 'Refreshing…' : 'Scanning…';
-  if (scanBtn)   scanBtn.disabled = true;
-  showToast(background ? 'Refreshing scan in background…' : 'Running system scan…',
-            'loading', { duration: 4000 });
-
-  const steps = [
-    'Collecting OS info…', 'Reading CPU & memory…', 'Scanning block devices…',
-    'Enumerating packages…', 'Checking services…', 'Detecting network config…',
-    'Finalizing report…',
-  ];
-  let si = 0;
-  const stepTimer = setInterval(() => {
-    if (stepLabel) stepLabel.textContent = steps[si % steps.length];
-    si++;
-  }, 1300);
-
-  try {
-    const res  = await fetch('/api/scan', { method: 'POST' });
-    const data = await res.json();
-    clearInterval(stepTimer);
-
-    if (!data.ok) throw new Error(data.error || 'Scan failed');
-
-    _lastReport = data.report;
-    window.__scanReport = _lastReport;
-    populateDashboard(data.report);
-
-    const lastScanEl = document.getElementById('last-scan-time');
-    if (lastScanEl) lastScanEl.textContent = new Date().toLocaleTimeString();
-
-  } catch (err) {
-    clearInterval(stepTimer);
-    startScan._running = false;
-    if (_dot)      _dot.className = 'status-dot error';
-    if (_statusLbl) _statusLbl.textContent = 'Scan error';
-    if (stepLabel) stepLabel.textContent = 'Scan failed: ' + err.message;
-    showToast('System scan failed: ' + err.message, 'error');
-    setTimeout(() => { if (overlay) overlay.style.display = 'none'; }, 3000);
-    if (scanBtn) scanBtn.disabled = false;
-    return;
-  }
-
-  // Hide overlay immediately — show system specs to user right away
-  if (overlay) overlay.style.display = 'none';
-  if (scanBtn) scanBtn.disabled = false;
   startScan._running = false;
-
-  // Both checks run in parallel after the overlay closes
-  runCVEAnalysis(_lastReport);
-  runIntegrityCheck(_lastReport);
-
-  // Continuous monitoring: schedule the next automatic scan
-  scheduleNextScan();
+  if (opts.background === true) return;   // silent for any automatic callers
+  showToast('Scans run from the desktop agent — this dashboard shows the synced results.', 'info');
 }
 
 /* --- Continuous monitoring (auto-rescan + countdown) --- */
@@ -336,12 +276,12 @@ let _scanIntervalMs = 5 * 60 * 1000;   // default: every 5 minutes
 let _nextScanAt     = 0;
 let _countdownTimer = null;
 
-function scheduleNextScan() {
-  _nextScanAt = Date.now() + _scanIntervalMs;
-  if (_countdownTimer) clearInterval(_countdownTimer);
-  _countdownTimer = setInterval(tickCountdown, 1000);
-  tickCountdown();
-}
+function scheduleNextScan() { /* disabled — no host scan to schedule */ }
+
+// Host scanning is gone in production, so hide the manual Scan button and the
+// "continuous monitoring / next automatic scan" chip on load.
+document.getElementById('monitor-chip')?.classList.add('hidden');
+document.getElementById('scan-btn')?.classList.add('hidden');
 
 function tickCountdown() {
   const el   = document.getElementById('next-scan-countdown');
@@ -492,53 +432,9 @@ async function runCVEAnalysis(report) {
 }
 
 /* --- Integrity Check --- */
-
-async function runIntegrityCheck(report) {
-  if (!report) return;
-
-  const loadingIds = ['integrity-mal-tbody', 'integrity-bin-tbody', 'integrity-suid-tbody'];
-  loadingIds.forEach(id => {
-    const el = document.getElementById(id);
-    if (el) el.innerHTML = `<tr><td colspan="5">
-      <div class="empty-state">
-        <div class="scan-spinner" style="width:24px;height:24px;margin:0 auto 10px"></div>
-        <div style="color:var(--text-muted)">Checking…</div>
-      </div></td></tr>`;
-  });
-
-  try {
-    const res  = await fetch('/api/integrity', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify(report),
-    });
-    const data = await res.json();
-    if (!data.ok) throw new Error(data.error || 'Integrity check failed');
-
-    // Merge suid_files and services from the scan report into the integrity data
-    const extData = {
-      ...data,
-      suid_files: report.suid_files         ?? [],
-      services:   report.services?.running  ?? [],
-    };
-    populateIntegrity(extData, report?.os?.hostname);
-    const _isum   = data.summary ?? {};
-    const _issues = (_isum.malicious_pkgs ?? 0) + (_isum.file_issues ?? 0);
-    if (_issues > 0)
-      showToast(`System audit: ${_issues} integrity issue${_issues !== 1 ? 's' : ''} found — see System Audit`, 'warning');
-    const hostname = report?.os?.hostname;
-    if (hostname && typeof window.__saveIntegrityData === 'function') {
-      window.__saveIntegrityData(hostname, extData);
-    }
-  } catch (err) {
-    ['integrity-mal-tbody', 'integrity-bin-tbody', 'integrity-suid-tbody'].forEach(id => {
-      const el = document.getElementById(id);
-      if (el) el.innerHTML = `<tr><td colspan="5">
-        <div class="empty-state" style="color:var(--sev-critical)">
-          Failed: ${escapeHtml(err.message)}</div></td></tr>`;
-    });
-  }
-}
+// Host integrity scanning was removed for production (the server must not scan
+// itself). Integrity data now comes only from the desktop agents via Firestore
+// and is rendered by populateIntegrity() / the System Audit device selector.
 
 function populateIntegrity(data, hostname) {
   const sum  = data.summary       ?? {};
@@ -1047,6 +943,7 @@ function _buildDeviceCVEMap() {
 }
 
 window.__renderAllCVEs = function() { renderAllCVEs(); };
+window.__renderPatches = function() { try { renderPatches(); } catch (_) {} };
 function renderAllCVEs() {
   const deviceMap = _buildDeviceCVEMap();
   const multiDevice = deviceMap.size > 1;
@@ -2053,6 +1950,11 @@ window.__openDeviceModal = function(d) {
         }
         const statEl = document.getElementById('stat-devices');
         if (statEl) statEl.textContent = remaining;
+        // Sync the rest of the dashboard: drop this device from CVEs/Patches/Apps
+        // too (the realtime scans listener also does this, but do it immediately).
+        delete window.__deviceCache?.[hostname];
+        window.__renderAllCVEs?.();
+        window.__renderPatches?.();
       } else {
         deleteBtn.textContent = '⊗ Delete';
         deleteBtn.disabled = false;

@@ -1042,9 +1042,8 @@ curl -O https://scanoasis.tech/download/gui.py</code></pre>
         if (cveSection && !cveSection.classList.contains('hidden')) {
           window.__renderAllCVEs?.();
         }
-        // Auto-scan once on page load — in the background so cached results show
-        // instantly and the dashboard doesn't sit behind a blocking overlay.
-        window.startScan?.({ background: true });
+        // No host scan here: this dashboard is read-only and shows data synced
+        // from the desktop agents. (The server must never scan the droplet.)
       });
     });
 
@@ -1382,10 +1381,15 @@ curl -O https://scanoasis.tech/download/gui.py</code></pre>
         collection(db, 'users', uid, 'scans'),
         () => {
           if (scanFirst) { scanFirst = false; return; }
-          // A new scan landed — refresh history + scanned-device cards, then the
-          // discovered overlay (which dedupes against scanned hosts).
+          // A scan was added/changed/DELETED — refresh history + device cards,
+          // then re-render every page that aggregates per-device data so a
+          // deleted device disappears from CVEs/Patches/Apps too (not just here).
           loadScanHistory(uid);
-          loadDevices(uid).then(() => window.__loadDiscovered?.());
+          loadDevices(uid).then(() => {
+            window.__loadDiscovered?.();
+            window.__renderAllCVEs?.();
+            window.__renderPatches?.();
+          });
         },
         err => console.error('scans listener', err)
       ));
