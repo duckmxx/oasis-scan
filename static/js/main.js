@@ -130,13 +130,7 @@ document.querySelectorAll('.nav-item[data-section]').forEach(item => {
     const el = document.getElementById(target);
     if (el) { el.classList.remove('hidden'); el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
     if (target === 'section-topology') {
-      if (_lastReport) {
-        runTopologyBuild();
-      } else {
-        const topo = _savedTopology || window.__savedData?.topology;
-        const cvs  = _cveData       || (window.__savedData ? { cves: window.__savedData.cves, counts: window.__savedData.counts } : null);
-        if (topo) runTopologyFromSaved(topo, cvs);
-      }
+      runTopologyFromFirestore();   // builds from the Firebase DB, no host scan
     }
     if (target === 'section-devices') {
       if (window.__deviceCache) buildDeviceNetworkMap(Object.values(window.__deviceCache));
@@ -546,7 +540,7 @@ function populateIntegrity(data, hostname) {
   if (svcCount) svcCount.textContent = svcs.length === 0 ? '—' : `${svcs.length} running`;
   if (svcBody) {
     svcBody.innerHTML = svcs.length === 0
-      ? `<div class="empty-state"><div class="empty-icon">—</div><div>No service data available. Run a scan on this device.</div></div>`
+      ? `<div class="empty-state"><div class="empty-icon">—</div><div>No service data for this device.</div></div>`
       : `<div class="service-grid">${svcs.map(s => `<span class="service-chip">${escapeHtml(s)}</span>`).join('')}</div>`;
   }
 }
@@ -737,7 +731,7 @@ function _renderVulnerableTable(vulnMap, pkgList, match) {
     const hasSearch = document.getElementById('apps-search')?.value?.trim();
     tbody.innerHTML = `<tr><td colspan="4"><div class="empty-state">
       <div class="empty-icon" style="color:var(--sev-low)">✓</div>
-      <div>${hasSearch ? 'No matching vulnerable packages.' : 'No packages with known CVEs — run a CVE analysis.'}</div>
+      <div>${hasSearch ? 'No matching vulnerable packages.' : 'No packages with known CVEs for this device.'}</div>
     </div></td></tr>`;
     return;
   }
@@ -1795,7 +1789,7 @@ window.__openDeviceModal = function(d) {
       </div>`
     : (d.critical !== undefined
         ? `<div class="modal-section"><div class="device-clean" style="padding:8px 0">✓ No known CVEs detected</div></div>`
-        : `<div class="modal-section"><div class="text-muted" style="font-size:12px">CVE data not yet available — run a scan with CVE analysis.</div></div>`);
+        : `<div class="modal-section"><div class="text-muted" style="font-size:12px">CVE data not yet synced for this device.</div></div>`);
 
   const netHtml = topo
     ? `<div class="modal-section">
@@ -1951,7 +1945,7 @@ function buildDeviceNetworkMap(devicesArray) {
   if (!container) return;
 
   if (!devicesArray || devicesArray.length === 0) {
-    container.innerHTML = '<div class="empty-state"><div class="empty-icon">⬡</div><div>No devices found — run a scan first.</div></div>';
+    container.innerHTML = '<div class="empty-state"><div class="empty-icon">⬡</div><div>No devices yet — run the desktop agent to populate this.</div></div>';
     return;
   }
 
@@ -2077,7 +2071,7 @@ function buildDeviceNetworkMap(devicesArray) {
    ========================================================= */
 
 document.getElementById('topo-rebuild-btn')?.addEventListener('click', () => {
-  if (_lastReport) runTopologyBuild();
+  runTopologyFromFirestore();
 });
 
 // Clear all discovered devices from the Attack Map (and the device DB). Wipes
@@ -2091,9 +2085,8 @@ document.getElementById('topo-clear-btn')?.addEventListener('click', async () =>
   if (result?.ok) {
     showToast(`Cleared ${result.deleted} device${result.deleted !== 1 ? 's' : ''}`, 'info');
     window.__netDevices = [];
-    window.__loadDiscovered?.([]);                  // refresh the Devices list
-    if (_lastReport) runTopologyBuild();            // rebuild the map without them
-    else if (window.__lastTopo) renderTopology(window.__lastTopo, _cveData, [], null, []);
+    window.__loadDiscovered?.([]);          // refresh the Devices list
+    runTopologyFromFirestore();             // rebuild the map from the DB (now empty)
   } else {
     showToast('Clear failed: ' + (result?.error || 'unknown error'), 'warning');
   }
@@ -2111,6 +2104,69 @@ window.__genAttackAnalysis = function () {
 };
 // Back-compat alias for the toolbar button handler in ai.js
 window.__regenAttackVectors = window.__genAttackAnalysis;
+
+// Build the Attack Map ENTIRELY from Firestore: discovered LAN devices
+// (network_devices) + scanned hosts + their CVEs. No host scan / _lastReport
+// required — the agents populate the DB and the dashboard just renders it.
+async function runTopologyFromFirestore() {
+  const container = document.getElementById('topology-cy');
+  if (!container) return;
+  container.innerHTML = `<div class="empty-state">
+    <div class="scan-spinner" style="width:32px;height:32px;margin:0 auto 12px"></div>
+    <div style="color:var(--text-muted)">Building network map…</div>
+  </div>`;
+
+  let fsDevices = [], netDevices = [];
+  if (typeof window.__getFirestoreDevices === 'function') fsDevices  = await window.__getFirestoreDevices();
+  if (typeof window.__getNetworkDevices === 'function')   netDevices = await window.__getNetworkDevices();
+
+  // CVE context: prefer the loaded set, else the last saved scan, else aggregate
+  // CVEs across every device we know about.
+  const cvs = _cveData
+    || (window.__savedData?.cves?.length ? { cves: window.__savedData.cves, counts: window.__savedData.counts } : null)
+    || _aggregateDeviceCves();
+
+  // Use a real saved topology if one exists; otherwise synthesize one from the
+  // discovered devices so the map renders with no host scan involved.
+  let topo = _savedTopology || window.__savedData?.topology;
+  if (!topo || (!topo.gateway && !(topo.neighbors?.length))) {
+    topo = _synthTopoFromDevices(netDevices);
+  }
+
+  if (!netDevices.length && !fsDevices.length && !(topo.neighbors?.length)) {
+    container.innerHTML = `<div class="empty-state">
+      <div class="empty-icon">⬡</div>
+      <div>No devices yet — run the desktop agent on your network to populate the map.</div>
+    </div>`;
+    return;
+  }
+
+  renderTopology(topo, cvs, fsDevices, null, netDevices);
+  showCachedNarrativeOrHint(topo, cvs);
+}
+
+// Exposed so the realtime device listener can refresh the map while it's open.
+window.__rebuildAttackMap = runTopologyFromFirestore;
+
+// Minimal topology root when no agent-provided topology exists: an internet →
+// router → devices shape. Router IP is taken from a discovered gateway device.
+function _synthTopoFromDevices(netDevices) {
+  const router = (netDevices || []).find(d => /router|gateway/i.test(d.device_type || ''));
+  return { hostname: 'Your Network', gateway: router?.ip || null, my_ips: [], neighbors: [] };
+}
+
+// Aggregate CVEs across all cached device scans into one {cves, counts} set.
+function _aggregateDeviceCves() {
+  const cves = [];
+  const counts = { critical: 0, high: 0, medium: 0, low: 0, unknown: 0 };
+  if (window.__deviceCache) {
+    for (const d of Object.values(window.__deviceCache)) {
+      if (!Array.isArray(d.cves)) continue;
+      for (const c of d.cves) { cves.push(c); counts[c.severity || 'unknown'] = (counts[c.severity || 'unknown'] || 0) + 1; }
+    }
+  }
+  return cves.length ? { cves, counts } : null;
+}
 
 async function runTopologyFromSaved(topo, cveData) {
   const container = document.getElementById('topology-cy');

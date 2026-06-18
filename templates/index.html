@@ -157,7 +157,7 @@
               <div class="posture-icon" id="overview-integrity-icon">⬡</div>
               <div>
                 <div class="posture-title" id="overview-integrity-title">No scan yet</div>
-                <div class="posture-sub" id="overview-integrity-sub">Run a scan to verify package integrity and check for malicious packages.</div>
+                <div class="posture-sub" id="overview-integrity-sub">Run the desktop agent on a device to sync its security profile.</div>
               </div>
             </div>
             <div class="sev-breakdown" id="overview-sev-breakdown">
@@ -179,7 +179,7 @@
             <div id="overview-top-cves">
               <div class="empty-state">
                 <div class="empty-icon">⬡</div>
-                <div>No CVEs yet — run a scan to detect vulnerabilities.</div>
+                <div>No CVEs yet — run the desktop agent to sync vulnerabilities.</div>
               </div>
             </div>
           </div>
@@ -195,7 +195,7 @@
         <div class="panel-body" id="overview-history">
           <div class="empty-state">
             <div class="empty-icon">↺</div>
-            <div>No scans recorded yet — run a scan to start building history.</div>
+            <div>No scans yet — run the desktop agent on a device to populate this.</div>
           </div>
         </div>
       </div>
@@ -263,7 +263,7 @@
               <tr><td colspan="9">
                 <div class="empty-state">
                   <div class="empty-icon">⬡</div>
-                  <div>No scan results yet. Run a scan to detect CVEs.</div>
+                  <div>No data yet — run the desktop agent to detect CVEs.</div>
                 </div>
               </td></tr>
             </tbody>
@@ -289,7 +289,7 @@
         <div class="panel-body" id="patch-list">
           <div class="empty-state">
             <div class="empty-icon">✚</div>
-            <div>No vulnerable packages yet — run a scan to build your patch to-do list.</div>
+            <div>No vulnerable packages yet — run the desktop agent to build your patch list.</div>
           </div>
         </div>
       </div>
@@ -337,7 +337,7 @@
               <tr><td colspan="4">
                 <div class="empty-state">
                   <div class="empty-icon">⚠</div>
-                  <div>Run a scan and CVE analysis to see vulnerable packages.</div>
+                  <div>Run the desktop agent to sync vulnerable packages.</div>
                 </div>
               </td></tr>
             </tbody>
@@ -363,7 +363,7 @@
               <tr><td colspan="2">
                 <div class="empty-state">
                   <div class="empty-icon">⬡</div>
-                  <div>Run a scan to detect foreign / AUR packages.</div>
+                  <div>Run the desktop agent to detect foreign / AUR packages.</div>
                 </div>
               </td></tr>
             </tbody>
@@ -464,7 +464,7 @@
         <div id="topology-cy" class="topo-canvas">
           <div class="empty-state">
             <div class="empty-icon">⬡</div>
-            <div>Run a scan first to build the network topology.</div>
+            <div>No network data yet — run the desktop agent to populate the map.</div>
           </div>
         </div>
         <div id="topo-node-info" class="topo-node-info"></div>
@@ -523,7 +523,7 @@
           <div class="devices-grid" id="devices-grid">
             <div class="empty-state" style="grid-column:1/-1">
               <div class="empty-icon">⊟</div>
-              <div>No devices found — run a scan to register this device.</div>
+              <div>No devices yet — run the desktop agent to register a device.</div>
             </div>
           </div>
         </div>
@@ -1052,7 +1052,7 @@ curl -O https://scanoasis.tech/download/gui.py</code></pre>
                 ${(crit + high + other) === 0
                   ? '<span class="device-clean">✓ No known CVEs</span>' : ''}
                </div>`
-            : '<div class="device-vuln-row"><span class="device-no-cve-data">Run scan to check CVEs</span></div>';
+            : '<div class="device-vuln-row"><span class="device-no-cve-data">No CVE data yet</span></div>';
 
           const card = document.createElement('div');
           card.className = 'device-card' + (crit > 0 ? ' device-card-critical' : high > 0 ? ' device-card-high' : '');
@@ -1290,6 +1290,9 @@ curl -O https://scanoasis.tech/download/gui.py</code></pre>
           if (netFirst) { netFirst = false; return; }
           // Feed the already-delivered docs straight to the renderer (no re-fetch).
           window.__loadDiscovered?.(_mapNetworkDevices(snap));
+          // If the Attack Map is open, rebuild it live as devices change.
+          const topo = document.getElementById('section-topology');
+          if (topo && !topo.classList.contains('hidden')) window.__rebuildAttackMap?.();
         },
         err => console.error('network_devices listener', err)
       ));
