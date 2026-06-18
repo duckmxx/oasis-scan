@@ -1637,6 +1637,10 @@ curl -O https://scanoasis.tech/download/gui.py</code></pre>
         // Flask already wrote full token data (including refresh_token) to Firestore.
         // No need to call __saveAgentTokenMeta here — it would overwrite the refresh_token field.
         if (nameInput) nameInput.value = '';
+        // Full server URL for the agent. Prefer https for public hosts (the agent
+        // should connect over TLS); keep http for localhost / private LAN ranges.
+        const _isLocal = /^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(location.hostname);
+        const srvUrl = _isLocal ? location.origin : location.origin.replace(/^http:\/\//, 'https://');
         if (resultEl) {
           resultEl.style.display = 'block';
           resultEl.innerHTML = `
@@ -1646,19 +1650,27 @@ curl -O https://scanoasis.tech/download/gui.py</code></pre>
                 <code class="mono" style="font-size:11px;background:var(--bg-deep);padding:6px 10px;border-radius:4px;flex:1;word-break:break-all;user-select:all">${_esc(d.token)}</code>
                 <button class="btn btn-ghost btn-sm" id="copy-token-btn">Copy</button>
               </div>
-              <div style="font-size:11px;color:var(--text-muted);margin-top:8px">
-                Use in gui.py → <em>Sign in with agent token</em><br>
-                Server URL: <code class="mono">${_esc(location.origin)}</code>
+              <div style="font-size:11px;color:var(--text-muted);margin-top:10px">
+                Use in gui.py → <em>Sign in with agent token</em>
+              </div>
+              <div style="display:flex;gap:8px;align-items:center;margin-top:6px">
+                <span style="font-size:11px;color:var(--text-muted);flex-shrink:0">Server URL</span>
+                <code class="mono" style="font-size:11px;background:var(--bg-deep);padding:6px 10px;border-radius:4px;flex:1;word-break:break-all;user-select:all">${_esc(srvUrl)}</code>
+                <button class="btn btn-ghost btn-sm" id="copy-server-btn">Copy</button>
               </div>
               <button class="btn btn-ghost btn-sm" style="margin-top:8px;font-size:11px" id="dismiss-token-result">Dismiss</button>
             </div>`;
-          document.getElementById('copy-token-btn')?.addEventListener('click', function() {
-            const btn = this;
-            _copyText(d.token)
-              .then(() => { btn.textContent = 'Copied!'; })
-              .catch(() => { btn.textContent = 'Select & ⌘/Ctrl+C'; })
-              .finally(() => setTimeout(() => { btn.textContent = 'Copy'; }, 2000));
-          });
+          const _wireCopy = (id, value) => {
+            document.getElementById(id)?.addEventListener('click', function() {
+              const btn = this;
+              _copyText(value)
+                .then(() => { btn.textContent = 'Copied!'; })
+                .catch(() => { btn.textContent = 'Press Ctrl+C'; })
+                .finally(() => setTimeout(() => { btn.textContent = 'Copy'; }, 2000));
+            });
+          };
+          _wireCopy('copy-token-btn',  d.token);
+          _wireCopy('copy-server-btn', srvUrl);
           document.getElementById('dismiss-token-result')?.addEventListener('click', () => {
             resultEl.style.display = 'none';
           });
