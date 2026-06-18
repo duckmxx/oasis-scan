@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import urllib.request
 import urllib.error
+import urllib.parse
 from datetime import datetime, timezone
 
 from config import FIREBASE_API_KEY, FIREBASE_PROJECT
@@ -491,9 +492,16 @@ def firebase_login(email, password):
 
 
 def firestore_save(id_token, uid, report, cves=None, counts=None):
-    url = (f"https://firestore.googleapis.com/v1/projects/{FIREBASE_PROJECT}"
-           f"/databases/(default)/documents/users/{uid}/scans")
     os_info  = report["os"]
+    hostname = os_info.get("hostname") or ""
+    if not hostname:
+        return False, "no hostname in report"
+    # One doc per host (upsert), keyed by hostname — matches the device_tags /
+    # integrity keying and removes the old per-scan duplication (a fresh scan now
+    # replaces the host's record instead of piling up a new doc each run).
+    url = (f"https://firestore.googleapis.com/v1/projects/{FIREBASE_PROJECT}"
+           f"/databases/(default)/documents/users/{uid}/scans/"
+           + urllib.parse.quote(hostname, safe=""))
     mem      = report["memory"]["summary"]
     cpu      = report["cpu"]["summary"]
     pkgs     = report.get("packages", {})
@@ -559,7 +567,8 @@ def firestore_save(id_token, uid, report, cves=None, counts=None):
         doc["fields"]["cves"] = {"arrayValue": {"values": cve_values}}
 
     body = json.dumps(doc).encode()
-    req = urllib.request.Request(url, data=body, headers={
+    # PATCH to the document path = create-or-replace (upsert), keyed by hostname.
+    req = urllib.request.Request(url, data=body, method="PATCH", headers={
         "Content-Type": "application/json",
         "Authorization": f"Bearer {id_token}",
     })

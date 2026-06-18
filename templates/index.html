@@ -1367,7 +1367,7 @@ curl -O https://scanoasis.tech/download/gui.py</code></pre>
     }
     function _startRealtime(uid) {
       _stopRealtime();   // guard against double-subscribe if auth fires twice
-      let netFirst = true, scanFirst = true;
+      let netFirst = true, scanFirst = true, intFirst = true;
       _rtUnsubs.push(onSnapshot(
         collection(db, 'users', uid, 'network_devices'),
         snap => {
@@ -1392,6 +1392,16 @@ curl -O https://scanoasis.tech/download/gui.py</code></pre>
           });
         },
         err => console.error('scans listener', err)
+      ));
+      _rtUnsubs.push(onSnapshot(
+        collection(db, 'users', uid, 'integrity'),
+        () => {
+          if (intFirst) { intFirst = false; return; }
+          // Integrity doc added/deleted (e.g. a device was purged) — keep the
+          // System Audit device selector in sync.
+          window.__refreshIntegrityDevices?.();
+        },
+        err => console.error('integrity listener', err)
       ));
     }
     window.__stopRealtime = _stopRealtime;
@@ -1438,33 +1448,50 @@ curl -O https://scanoasis.tech/download/gui.py</code></pre>
     window.__getDeviceNotes = (hostname) => (window.__deviceNotes || {})[hostname] || '';
 
     // ── Device deletion ─────────────────────────────────────────────────────
-    window.__deleteDevice = async function(hostname) {
+    // A "device" (one hostname) is spread across several collections keyed
+    // differently — see the schema note at the top of this script. This single
+    // cascade is the ONE place that removes a device, so deletion can never go
+    // partial again (the System-Audit-leftover bug was a missing `integrity`
+    // delete here). Every delete path calls this.
+    window.__purgeDevice = async function(hostname) {
       const user = auth.currentUser;
-      if (!user) return { ok: false };
+      if (!user || !hostname) return { ok: false, error: 'not signed in' };
+      const uid = user.uid;
+      const delAll = async (col, snap) =>
+        Promise.all(snap.docs.map(d => deleteDoc(doc(db, 'users', uid, col, d.id))));
       try {
-        // Delete all scan docs for this hostname
-        const q    = query(collection(db, 'users', user.uid, 'scans'), where('hostname', '==', hostname));
-        const snap = await getDocs(q);
-        await Promise.all(snap.docs.map(d => deleteDoc(doc(db, 'users', user.uid, 'scans', d.id))));
-        // Delete label/notes
-        await deleteDoc(doc(db, 'users', user.uid, 'device_tags', hostname));
-        // Also remove any LAN-discovered entry for the same host so it doesn't
-        // reappear on the map as a "discovered" device after deletion.
+        // scans — many docs per host, matched by the `hostname` field
+        const ss = await getDocs(query(collection(db, 'users', uid, 'scans'), where('hostname', '==', hostname)));
+        await delAll('scans', ss);
+        // network_devices — matched by the `hostname` field (keyed by MAC/IP)
         try {
-          const nq    = query(collection(db, 'users', user.uid, 'network_devices'), where('hostname', '==', hostname));
-          const nsnap = await getDocs(nq);
-          await Promise.all(nsnap.docs.map(nd => deleteDoc(doc(db, 'users', user.uid, 'network_devices', nd.id))));
-        } catch (_) { /* best-effort */ }
+          const ns = await getDocs(query(collection(db, 'users', uid, 'network_devices'), where('hostname', '==', hostname)));
+          await delAll('network_devices', ns);
+        } catch (_) {}
+        // device_tags + integrity — keyed directly by hostname
+        await deleteDoc(doc(db, 'users', uid, 'device_tags', hostname)).catch(() => {});
+        await deleteDoc(doc(db, 'users', uid, 'integrity',   hostname)).catch(() => {});
+        // ai_cache — drop this host's cached AI narratives (id prefix atk_<host>_)
+        try {
+          const ac = await getDocs(collection(db, 'users', uid, 'ai_cache'));
+          await Promise.all(ac.docs
+            .filter(d => d.id.startsWith('atk_' + hostname + '_'))
+            .map(d => deleteDoc(doc(db, 'users', uid, 'ai_cache', d.id))));
+        } catch (_) {}
         // Clear local caches
-        if (window.__deviceCache)  delete window.__deviceCache[hostname];
-        if (window.__deviceTags)   delete window.__deviceTags[hostname];
-        if (window.__deviceNotes)  delete window.__deviceNotes[hostname];
-        return { ok: true, deleted: snap.size };
+        delete window.__deviceCache?.[hostname];
+        delete window.__deviceTags?.[hostname];
+        delete window.__deviceNotes?.[hostname];
+        // Sync the System Audit device selector (drops the chip immediately)
+        window.__refreshIntegrityDevices?.(hostname);
+        return { ok: true, deleted: ss.size };
       } catch (e) {
-        console.error('Failed to delete device', e);
+        console.error('Failed to purge device', e);
         return { ok: false, error: e.message };
       }
     };
+    // Back-compat alias — all callers go through the single cascade above.
+    window.__deleteDevice = window.__purgeDevice;
 
     // ── Integrity data (per-device, persisted to Firestore) ────────────────
     window.__saveIntegrityData = async function(hostname, data) {
@@ -1505,9 +1532,15 @@ curl -O https://scanoasis.tech/download/gui.py</code></pre>
     window.__saveScanResult = async function(result) {
       const user = auth.currentUser;
       if (!user) return;
+      const hostname = result?.hostname;
+      if (!hostname) { console.error('saveScanResult: missing hostname'); return; }
       try {
-        await addDoc(collection(db, 'users', user.uid, 'scans'), {
+        // One doc per host (upsert, keyed by hostname) — same model as the agent
+        // and device_tags/integrity. setDoc replaces the host's record; no
+        // per-scan duplication.
+        await setDoc(doc(db, 'users', user.uid, 'scans', hostname), {
           ...result,
+          hostname,
           createdAt:  serverTimestamp(),
           scanned_at: new Date().toISOString(),
         });
