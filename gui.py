@@ -10,10 +10,12 @@ import math
 import time
 import sys
 import os
+import json
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import scanner as _sc
 import net_discovery as _nd
+import cve_lookup as _cve
 
 # ── Palette (mirrors the web dashboard) ──────────────────────────────────────
 BG     = "#08090e"
@@ -46,7 +48,7 @@ SCAN_STEPS = [
     "Reading CPU & memory…",
     "Scanning block devices…",
     "Enumerating installed packages…",
-    "Checking running services…",
+    "Checking for known CVEs…",
     "Mapping network interfaces…",
     "Finalizing report…",
     "Syncing to cloud…",
@@ -109,7 +111,7 @@ class LoginFrame(tk.Frame):
 
         # ── Logo / wordmark ────────────────────────────────────────────────────
         top = tk.Frame(self, bg=BG)
-        top.pack(pady=(56, 0))
+        top.pack(pady=(40, 0))
         logo = _logo(48)
         if logo:
             lg = tk.Label(top, image=logo, bg=BG)
@@ -120,48 +122,105 @@ class LoginFrame(tk.Frame):
         tk.Label(top, text="Scan Oasis", font=F_TITLE,
                  bg=BG, fg=TEXT).pack(pady=(14, 0))
         tk.Label(top, text="Sign in to continue",
-                 font=F_BODY, bg=BG, fg=TSEC).pack(pady=(6, 0))
+                 font=F_BODY, bg=BG, fg=TSEC).pack(pady=(4, 0))
 
         # ── Card ──────────────────────────────────────────────────────────────
         card = tk.Frame(self, bg=PANEL,
                         highlightbackground=BORDER, highlightthickness=1)
-        card.pack(padx=56, pady=(40, 0), fill="x")
+        card.pack(padx=56, pady=(28, 0), fill="x")
         inn = tk.Frame(card, bg=PANEL)
-        inn.pack(padx=34, pady=34, fill="x")
+        inn.pack(padx=34, pady=(24, 34), fill="x")
 
-        # Email
-        tk.Label(inn, text="EMAIL", font=F_LABEL,
+        # ── Tab switcher ───────────────────────────────────────────────────────
+        tab_row = tk.Frame(inn, bg=PANEL)
+        tab_row.pack(fill="x", pady=(0, 22))
+
+        self._tab_email_btn = tk.Label(
+            tab_row, text="Email / Password", font=(FONT, 10, "bold"),
+            bg=ACCENT, fg=BG, padx=14, pady=6, cursor="hand2")
+        self._tab_email_btn.pack(side="left")
+        self._tab_email_btn.bind("<Button-1>", lambda _: self._switch_tab("email"))
+
+        self._tab_token_btn = tk.Label(
+            tab_row, text="Agent Token", font=(FONT, 10),
+            bg=HOVER, fg=TSEC, padx=14, pady=6, cursor="hand2")
+        self._tab_token_btn.pack(side="left", padx=(2, 0))
+        self._tab_token_btn.bind("<Button-1>", lambda _: self._switch_tab("token"))
+
+        # ── Email / password pane ─────────────────────────────────────────────
+        self._email_frame = tk.Frame(inn, bg=PANEL)
+        self._email_frame.pack(fill="x")
+
+        tk.Label(self._email_frame, text="EMAIL", font=F_LABEL,
                  bg=PANEL, fg=TSEC).pack(anchor="w")
-        self._email = Entry(inn, placeholder="you@example.com")
+        self._email = Entry(self._email_frame, placeholder="you@example.com")
         self._email.pack(fill="x", pady=(8, 20))
 
-        # Password
-        tk.Label(inn, text="PASSWORD", font=F_LABEL,
+        tk.Label(self._email_frame, text="PASSWORD", font=F_LABEL,
                  bg=PANEL, fg=TSEC).pack(anchor="w")
-        self._pw = Entry(inn, placeholder="••••••••", show="•")
-        self._pw.pack(fill="x", pady=(8, 28))
+        self._pw = Entry(self._email_frame, placeholder="••••••••", show="•")
+        self._pw.pack(fill="x", pady=(8, 24))
 
-        # Button
-        self._btn = Btn(inn, "Sign In", self._submit)
+        self._btn = Btn(self._email_frame, "Sign In", self._submit)
         self._btn.pack(fill="x")
 
-        # Auth status — spinner + label in one row
+        # ── Agent token pane (hidden by default) ──────────────────────────────
+        self._token_frame = tk.Frame(inn, bg=PANEL)
+        # (shown when token tab is selected)
+
+        tk.Label(self._token_frame, text="TOKEN", font=F_LABEL,
+                 bg=PANEL, fg=TSEC).pack(anchor="w")
+        self._token_entry = Entry(self._token_frame, placeholder="32-char hex token from dashboard")
+        self._token_entry.pack(fill="x", pady=(8, 20))
+
+        tk.Label(self._token_frame, text="SERVER URL", font=F_LABEL,
+                 bg=PANEL, fg=TSEC).pack(anchor="w")
+        self._server_entry = Entry(self._token_frame, placeholder="http://192.168.1.x:5000")
+        self._server_entry.pack(fill="x", pady=(8, 24))
+
+        self._token_btn = Btn(self._token_frame, "Connect with Token", self._token_submit)
+        self._token_btn.pack(fill="x")
+
+        # ── Shared status row (spinner + message) ─────────────────────────────
         self._status_row = tk.Frame(inn, bg=PANEL)
-        self._status_row.pack(pady=(12, 0))
+        self._status_row.pack(pady=(14, 0))
         self._spin_cv = tk.Canvas(self._status_row, width=16, height=16,
                                    bg=PANEL, highlightthickness=0)
         self._spin_cv.pack(side="left")
         self._err_lbl = tk.Label(self._status_row, text="",
                                   font=("Inter", 9), bg=PANEL,
-                                  fg=ERR, wraplength=320)
+                                  fg=ERR, wraplength=340)
         self._err_lbl.pack(side="left", padx=(6, 0))
 
         self._spin_angle = 0.0
         self._spinning   = False
+        self._mode       = "email"
 
-        self.master.bind("<Return>", lambda _: self._submit())
+        self.master.bind("<Return>", lambda _: self._on_return())
 
-    # ── Spinner (small, shown while authenticating) ───────────────────────────
+    # ── Tab switching ─────────────────────────────────────────────────────────
+
+    def _switch_tab(self, mode: str):
+        self._mode = mode
+        self._err_lbl.config(text="")
+        if mode == "email":
+            self._token_frame.pack_forget()
+            self._email_frame.pack(fill="x", before=self._status_row)
+            self._tab_email_btn.config(bg=ACCENT, fg=BG, font=(FONT, 10, "bold"))
+            self._tab_token_btn.config(bg=HOVER,  fg=TSEC, font=(FONT, 10))
+        else:
+            self._email_frame.pack_forget()
+            self._token_frame.pack(fill="x", before=self._status_row)
+            self._tab_token_btn.config(bg=ACCENT, fg=BG, font=(FONT, 10, "bold"))
+            self._tab_email_btn.config(bg=HOVER,  fg=TSEC, font=(FONT, 10))
+
+    def _on_return(self):
+        if self._mode == "token":
+            self._token_submit()
+        else:
+            self._submit()
+
+    # ── Spinner ───────────────────────────────────────────────────────────────
 
     def _draw_login_spin(self):
         if not self._spinning or not self._spin_cv.winfo_exists():
@@ -182,16 +241,19 @@ class LoginFrame(tk.Frame):
         self._spin_angle = (self._spin_angle + 10) % 360
         self.after(40, self._draw_login_spin)
 
-    def _start_spin(self):
+    def _start_spin(self, msg="Authenticating…"):
         self._spinning = True
-        self._err_lbl.config(text="Authenticating…", fg=TSEC)
+        self._err_lbl.config(text=msg, fg=TSEC)
         self._draw_login_spin()
 
     def _stop_spin(self):
         self._spinning = False
         self._spin_cv.delete("all")
 
-    # ── Login logic ───────────────────────────────────────────────────────────
+    def _err(self, msg: str):
+        self._err_lbl.config(text=msg, fg=ERR)
+
+    # ── Email / password login ────────────────────────────────────────────────
 
     def _submit(self):
         email = self._email.get().strip()
@@ -202,9 +264,7 @@ class LoginFrame(tk.Frame):
         self._btn.config(state="disabled")
         self._err_lbl.config(text="", fg=ERR)
         self._start_spin()
-        threading.Thread(
-            target=self._login_thread, args=(email, pw), daemon=True
-        ).start()
+        threading.Thread(target=self._login_thread, args=(email, pw), daemon=True).start()
 
     def _login_thread(self, email: str, pw: str):
         token, result = _sc.firebase_login(email, pw)
@@ -226,8 +286,47 @@ class LoginFrame(tk.Frame):
             }
             self._err(msgs.get(result, f"Sign-in failed: {result}"))
 
-    def _err(self, msg: str):
-        self._err_lbl.config(text=msg, fg=ERR)
+    # ── Agent token login ─────────────────────────────────────────────────────
+
+    def _token_submit(self):
+        token  = self._token_entry.get().strip()
+        server = self._server_entry.get().strip().rstrip("/")
+        if not token:
+            self._err("Please enter a token.")
+            return
+        if not server:
+            self._err("Please enter the server URL.")
+            return
+        self._token_btn.config(state="disabled")
+        self._start_spin("Connecting…")
+        threading.Thread(target=self._token_thread, args=(token, server), daemon=True).start()
+
+    def _token_thread(self, token: str, server: str):
+        import urllib.request as _ur
+        import urllib.error   as _ue
+        try:
+            url  = f"{server}/api/agent-auth"
+            body = json.dumps({"token": token}).encode()
+            req  = _ur.Request(url, data=body, headers={"Content-Type": "application/json"})
+            with _ur.urlopen(req, timeout=12) as resp:
+                data = json.loads(resp.read())
+        except _ue.HTTPError as e:
+            try:
+                data = json.loads(e.read())
+            except Exception:
+                data = {"ok": False, "error": f"Server returned HTTP {e.code}"}
+        except Exception as exc:
+            data = {"ok": False, "error": str(exc)}
+        self.after(0, lambda: self._on_token_result(data))
+
+    def _on_token_result(self, data: dict):
+        self._stop_spin()
+        self._token_btn.config(state="normal")
+        if data.get("ok"):
+            self.master._creds = (data["id_token"], data["uid"])
+            self.master._switch(ScanFrame, "agent")
+        else:
+            self._err(data.get("error", "Authentication failed."))
 
 
 # ── Scan / loading frame ──────────────────────────────────────────────────────
@@ -308,11 +407,22 @@ class ScanFrame(tk.Frame):
         self._step = 3          # packages — slow, real work starts here
         report = _sc.scan()
 
+        self._step = 4          # CVE analysis
+        cves_list, counts = [], None
+        try:
+            cves_list = _cve.lookup_cves(report)
+            counts = {"critical": 0, "high": 0, "medium": 0, "low": 0, "unknown": 0}
+            for c in cves_list:
+                s = c.get("severity", "unknown")
+                counts[s] = counts.get(s, 0) + 1
+        except Exception:
+            pass  # CVE lookup is best-effort; don't block the sync
+
         self._step = 6
         time.sleep(0.08)
 
         self._step = 7          # syncing
-        ok, err = _sc.firestore_save(token, uid, report)
+        ok, err = _sc.firestore_save(token, uid, report, cves=cves_list, counts=counts)
 
         self._done = True
         self.after(0, lambda: self.master._switch(

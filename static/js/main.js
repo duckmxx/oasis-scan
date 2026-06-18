@@ -1010,6 +1010,7 @@ function _buildDeviceCVEMap() {
   return map;
 }
 
+window.__renderAllCVEs = function() { renderAllCVEs(); };
 function renderAllCVEs() {
   const deviceMap = _buildDeviceCVEMap();
   const multiDevice = deviceMap.size > 1;
@@ -1488,15 +1489,16 @@ async function _aiPatchPackage(pkg, host, family) {
     `Package: ${pkg}\nInstalled: ${pkgCves[0]?.installed ?? '?'}  Fixed in: ${pkgCves[0]?.fixed ?? '?'}\n` +
     `CVEs (${pkgCves.length}):\n${cveLines}\n\n` +
     `Suggested upgrade command: ${cmd}\n\n` +
-    `Respond in EXACTLY this structure, terse and practical, under 160 words, no preamble:\n` +
+    `Respond in EXACTLY this structure, terse and practical, under 200 words, no preamble:\n` +
     `**Risk:** one sentence on real-world impact.\n` +
     `**Fix:** the exact shell commands (in a \`\`\`bash code block\`\`\`). Prefer upgrading to the fixed version.\n` +
-    `**If you can't patch now:** one or two mitigations.`;
+    `**If you can't patch now:** one or two mitigations.\n` +
+    `**Harden:** one or two hardening steps beyond patching — SELinux/AppArmor policy, file permissions (chmod/chown), capability drops, or syscall filters.`;
 
   try {
     const res = await fetch('/api/ai/complete', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages: [{ role: 'user', content: prompt }], temperature: 0.3, max_tokens: 600 }),
+      body: JSON.stringify({ messages: [{ role: 'user', content: prompt }], temperature: 0.3, max_tokens: 768 }),
     });
     const data = await res.json();
     if (!data.ok) throw new Error(data.error || 'AI request failed');
@@ -1812,6 +1814,7 @@ window.__openDeviceModal = function(d) {
     riskBadge.style.display = riskLvl === 'unknown' ? 'none' : '';
   }
 
+  const _closeModal = `document.getElementById('device-modal').style.display='none';`;
   const cveTableHtml = cves.length > 0
     ? `<div class="modal-section">
         <div class="modal-section-title">CVEs — top ${Math.min(cves.length, 10)} of ${cves.length}</div>
@@ -1819,17 +1822,21 @@ window.__openDeviceModal = function(d) {
           <thead><tr><th>ID</th><th>Package</th><th>Sev.</th><th>CVSS</th><th></th></tr></thead>
           <tbody>
             ${cves.slice(0, 10).map(c => {
-              const id    = c.id || '';
-              const nvd   = id.startsWith('CVE-') ? `https://nvd.nist.gov/vuln/detail/${id}` : '';
-              const arch  = id.startsWith('CVE-') ? `https://security.archlinux.org/${id}`
-                          : id.startsWith('ASA-') ? `https://security.archlinux.org/advisory/${id}` : '';
+              const id   = c.id || '';
+              const pkg  = c.package || '';
+              const arch = id.startsWith('CVE-') ? `https://security.archlinux.org/${id}`
+                         : id.startsWith('ASA-') ? `https://security.archlinux.org/advisory/${id}` : '';
+              const nvd  = id.startsWith('CVE-') ? `https://nvd.nist.gov/vuln/detail/${id}` : '';
+              const idCell = arch
+                ? `<a class="cve-link" href="${escapeHtml(arch)}" target="_blank" rel="noopener">${escapeHtml(id)}</a>`
+                : `<span class="mono">${escapeHtml(id)}</span>`;
               const links = [
-                nvd  ? `<a href="${escapeHtml(nvd)}"  target="_blank" rel="noopener" style="margin-right:4px;font-size:10px" class="btn btn-ghost btn-sm">NVD</a>`  : '',
-                arch ? `<a href="${escapeHtml(arch)}" target="_blank" rel="noopener" style="font-size:10px" class="btn btn-ghost btn-sm">Arch</a>` : '',
+                nvd ? `<a href="${escapeHtml(nvd)}" target="_blank" rel="noopener" style="font-size:10px;margin-right:4px" class="btn btn-ghost btn-sm">NVD</a>` : '',
+                pkg ? `<button class="btn btn-primary btn-sm" style="font-size:10px" onclick="${_closeModal}window.__gotoPatch('${escapeHtml(pkg)}','${escapeHtml(id)}')">Patch →</button>` : '',
               ].join('');
               return `<tr>
-                <td class="mono" style="font-size:11px">${escapeHtml(id)}</td>
-                <td>${escapeHtml(c.package)}</td>
+                <td class="mono" style="font-size:11px">${idCell}</td>
+                <td>${escapeHtml(pkg)}</td>
                 <td><span class="badge badge-${c.severity}">${c.severity}</span></td>
                 <td class="cvss-score cvss-${c.severity}">${c.cvss != null ? Number(c.cvss).toFixed(1) : '—'}</td>
                 <td style="white-space:nowrap">${links || '—'}</td>
@@ -2393,7 +2400,15 @@ function renderTopology(topo, cveData, fsDevices, aiPaths, netDevices) {
     maxZoom: 3,
   });
 
-  cy.on('tap', 'node', evt => showTopoNodeInfo(evt.target.data()));
+  cy.on('tap', 'node', evt => {
+    const d = evt.target.data();
+    // For scanned devices that have full data, open the modal directly.
+    if ((d.type === 'known' || d.type === 'current') && window.__deviceCache?.[d.label]) {
+      window.__openDeviceModal(window.__deviceCache[d.label]);
+    } else {
+      showTopoNodeInfo(d);
+    }
+  });
   cy.on('tap', 'edge', evt => showTopoEdgeInfo(evt.target.data()));
   window._topo_cy = cy;
   _applyTopoFilters();   // honour the current filter selection on (re)build
@@ -2635,7 +2650,7 @@ function showTopoNodeInfo(d) {
   } else if (d.type === 'discovered') {
     heading = `<strong>${escapeHtml(d.label)}</strong> <span class="text-muted">discovered on LAN — not yet system-scanned</span>`;
   } else if (d.type === 'known') {
-    heading = `<strong>${escapeHtml(d.label)}</strong> — Risk: ${riskLabel} <span class="text-muted">(previously scanned, offline now)</span>`;
+    heading = `<strong>${escapeHtml(d.label)}</strong> — Risk: ${riskLabel}`;
   } else {
     heading = `<strong>${escapeHtml(d.label)}</strong> — Risk: ${riskLabel}`;
   }
@@ -2782,13 +2797,25 @@ function _cveAttackEdges(topo, cveData, neighbors, fsDevices, netDevices, seenIp
   return defs;
 }
 
+function _cveToPackage(cveId) {
+  const cves = window.__savedData?.cves ?? [];
+  const match = cves.find(c => c.id === cveId);
+  return match?.package ?? null;
+}
+
 function showTopoEdgeInfo(d) {
   const panel = document.getElementById('topo-node-info');
   if (!panel || (d.etype !== 'attack' && d.etype !== 'pivot')) return;
   const kind  = d.etype === 'attack' ? 'Initial access' : 'Lateral movement';
   const color = _ATTACK_COLORS[d.pathIndex ?? 0] || '#ff3860';
   const cveLinks = (d.cves ? d.cves.split(',').map(s => s.trim()).filter(Boolean) : [])
-    .map(id => `<a class="cve-link" onclick="window.__gotoCVE('${escapeHtml(id)}')">${escapeHtml(id)}</a>`)
+    .map(id => {
+      const pkg = _cveToPackage(id);
+      const patchBtn = pkg
+        ? ` <button class="btn btn-ghost btn-sm" style="font-size:10px;padding:1px 5px;margin-left:2px" onclick="window.__gotoPatch('${escapeHtml(pkg)}','${escapeHtml(id)}')">Patch →</button>`
+        : '';
+      return `<span style="white-space:nowrap"><a class="cve-link" onclick="window.__gotoCVE('${escapeHtml(id)}')">${escapeHtml(id)}</a>${patchBtn}</span>`;
+    })
     .join('  ');
   panel.innerHTML =
     `<span class="topo-edge-vector" style="color:${color}">${escapeHtml(d.vector || 'Attack path')}</span>` +
@@ -2800,9 +2827,14 @@ function showTopoEdgeInfo(d) {
 
 function _renderAttackNarrativeResult(narrative, aiPaths, topo, subline, steps) {
   // The kill-web edges are drawn deterministically in renderTopology — here we
-  // only render the AI narrative text, with clickable CVE links.
-  const linkifyCVE = s => s.replace(/\b(CVE-\d{4}-\d{4,7}|ASA-\d{4}-\d+)\b/g,
-    m => `<a class="cve-link" onclick="window.__gotoCVE('${m}')">${m}</a>`);
+  // only render the AI narrative text, with clickable CVE links and patch buttons.
+  const linkifyCVE = s => s.replace(/\b(CVE-\d{4}-\d{4,7}|ASA-\d{4}-\d+)\b/g, m => {
+    const pkg = _cveToPackage(m);
+    const patchBtn = pkg
+      ? ` <button class="btn btn-ghost btn-sm" style="font-size:10px;padding:1px 5px" onclick="window.__gotoPatch('${pkg}','${m}')">Patch →</button>`
+      : '';
+    return `<a class="cve-link" onclick="window.__gotoCVE('${m}')">${m}</a>${patchBtn}`;
+  });
   const lines = narrative.split('\n').filter(l => l.trim());
   steps.innerHTML = lines.length > 0
     ? lines.map(l => `<p class="attack-step">${linkifyCVE(escapeHtml(l.trim()))}</p>`).join('')

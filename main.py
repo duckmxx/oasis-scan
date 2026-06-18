@@ -5,7 +5,9 @@ import json
 import os as _os
 import urllib.parse
 import urllib.request as _urllib_req
+import uuid
 import flask
+from datetime import datetime, timezone
 
 try:
     import edge_tts as _edge_tts
@@ -303,7 +305,214 @@ def api_tts():
 
 
 _DOWNLOAD_WHITELIST = {"gui.py", "scanner.py", "tts_server.py"}
-_BASE_DIR = _os.path.dirname(_os.path.abspath(__file__))
+_BASE_DIR   = _os.path.dirname(_os.path.abspath(__file__))
+_TOKEN_FILE = _os.path.join(_BASE_DIR, 'agent_tokens.json')
+
+
+def _load_tokens() -> dict:
+    try:
+        with open(_TOKEN_FILE) as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def _save_tokens(tokens: dict):
+    with open(_TOKEN_FILE, 'w') as f:
+        json.dump(tokens, f, indent=2)
+
+
+def _verify_firebase_token(id_token: str):
+    """Return uid if the Firebase ID token is valid, else None."""
+    try:
+        url  = f"https://identitytoolkit.googleapis.com/v1/accounts:lookup?key={FIREBASE_API_KEY}"
+        body = json.dumps({"idToken": id_token}).encode()
+        req  = _urllib_req.Request(url, data=body,
+                                   headers={"Content-Type": "application/json"})
+        with _urllib_req.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read())
+            users = data.get("users", [])
+            if users:
+                return users[0].get("localId")
+    except Exception:
+        pass
+    return None
+
+
+def _refresh_firebase_token(refresh_token: str):
+    """Exchange a Firebase refresh token for (id_token, uid). Returns (None, None) on failure."""
+    try:
+        url  = f"https://securetoken.googleapis.com/v1/token?key={FIREBASE_API_KEY}"
+        body = urllib.parse.urlencode({
+            "grant_type":    "refresh_token",
+            "refresh_token": refresh_token,
+        }).encode()
+        req  = _urllib_req.Request(url, data=body, headers={
+            "Content-Type": "application/x-www-form-urlencoded",
+        })
+        with _urllib_req.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read())
+            return data.get("id_token"), data.get("user_id")
+    except Exception:
+        pass
+    return None, None
+
+
+def _firestore_write_token(id_token: str, uid: str, token: str, name: str, refresh_token: str):
+    """Write full token data to Firestore — Firestore is the durable source of truth."""
+    url = (f"https://firestore.googleapis.com/v1/projects/{FIREBASE_PROJECT}"
+           f"/databases/(default)/documents/users/{uid}/agent_tokens/{token}")
+    doc = {"fields": {
+        "name":          {"stringValue": name},
+        "uid":           {"stringValue": uid},
+        "refresh_token": {"stringValue": refresh_token},
+        "created":       {"stringValue": datetime.now(timezone.utc).isoformat()},
+    }}
+    try:
+        req = _urllib_req.Request(
+            url, data=json.dumps(doc).encode(),
+            headers={"Content-Type": "application/json", "Authorization": f"Bearer {id_token}"},
+            method="PATCH")
+        with _urllib_req.urlopen(req, timeout=10):
+            pass
+    except Exception:
+        pass  # best-effort; local file is fallback
+
+
+def _firestore_read_token(id_token: str, uid: str, token: str) -> dict | None:
+    """Fetch a single token document from Firestore. Returns entry dict or None."""
+    url = (f"https://firestore.googleapis.com/v1/projects/{FIREBASE_PROJECT}"
+           f"/databases/(default)/documents/users/{uid}/agent_tokens/{token}")
+    req = _urllib_req.Request(url, headers={"Authorization": f"Bearer {id_token}"})
+    try:
+        with _urllib_req.urlopen(req, timeout=10) as resp:
+            fields = json.loads(resp.read()).get("fields", {})
+            rt     = fields.get("refresh_token", {}).get("stringValue", "")
+            if not rt:
+                return None
+            return {
+                "uid":           uid,
+                "name":          fields.get("name", {}).get("stringValue", "Agent"),
+                "refresh_token": rt,
+                "created":       fields.get("created", {}).get("stringValue", ""),
+            }
+    except Exception:
+        return None
+
+
+@app.route("/api/info")
+def api_info():
+    return flask.jsonify({"ok": True, "model": AI_MODEL})
+
+
+@app.route("/api/agent-auth", methods=["POST"])
+def api_agent_auth():
+    """Exchange an agent token for a Firebase ID token (used by gui.py)."""
+    body  = flask.request.get_json(force=True) or {}
+    token = (body.get("token") or "").strip()
+    if not token:
+        return flask.jsonify({"ok": False, "error": "token required"}), 400
+
+    tokens = _load_tokens()
+    entry  = tokens.get(token)
+
+    # Local cache miss — try to restore from Firestore using the stored fallback credential.
+    # This handles server restarts where agent_tokens.json was lost.
+    if not entry:
+        fallback = tokens.get("_fallback")
+        if fallback:
+            fb_id_token, _ = _refresh_firebase_token(fallback["refresh_token"])
+            if fb_id_token:
+                entry = _firestore_read_token(fb_id_token, fallback["uid"], token)
+                if entry:
+                    # Repopulate local cache
+                    tokens[token] = entry
+                    _save_tokens(tokens)
+
+    if not entry:
+        return flask.jsonify({"ok": False, "error": "Invalid token"}), 401
+
+    id_token, uid = _refresh_firebase_token(entry["refresh_token"])
+    if not id_token:
+        return flask.jsonify({
+            "ok": False,
+            "error": "Could not refresh credentials — the token owner may have changed their password",
+        }), 401
+    return flask.jsonify({"ok": True, "id_token": id_token, "uid": uid})
+
+
+@app.route("/api/admin/create-token", methods=["POST"])
+def api_admin_create_token():
+    """Create a new agent token for the authenticated Firebase user."""
+    auth_header = flask.request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        return flask.jsonify({"ok": False, "error": "Unauthorized"}), 401
+    uid = _verify_firebase_token(auth_header[7:])
+    if not uid:
+        return flask.jsonify({"ok": False, "error": "Invalid Firebase token"}), 401
+
+    body          = flask.request.get_json(force=True) or {}
+    name          = (body.get("name") or "Agent").strip()[:50]
+    refresh_token = (body.get("refresh_token") or "").strip()
+    if not refresh_token:
+        return flask.jsonify({"ok": False, "error": "refresh_token required"}), 400
+
+    token   = uuid.uuid4().hex
+    created = datetime.now(timezone.utc).isoformat()
+    tokens  = _load_tokens()
+    tokens[token] = {
+        "uid":           uid,
+        "name":          name,
+        "refresh_token": refresh_token,
+        "created":       created,
+    }
+    # Keep a fallback credential so /api/agent-auth can read Firestore if this file is lost
+    tokens["_fallback"] = {
+        "uid":           uid,
+        "refresh_token": refresh_token,
+        "updated":       created,
+    }
+    _save_tokens(tokens)
+
+    # Write full token data to Firestore — this is the durable source of truth.
+    # The local file is a cache; Firestore survives server restarts and disk loss.
+    _firestore_write_token(auth_header[7:], uid, token, name, refresh_token)
+
+    return flask.jsonify({"ok": True, "token": token, "name": name})
+
+
+@app.route("/api/admin/revoke-token", methods=["POST"])
+def api_admin_revoke_token():
+    """Revoke an agent token (must be called by the token's owner)."""
+    auth_header = flask.request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        return flask.jsonify({"ok": False, "error": "Unauthorized"}), 401
+    uid = _verify_firebase_token(auth_header[7:])
+    if not uid:
+        return flask.jsonify({"ok": False, "error": "Invalid Firebase token"}), 401
+
+    body  = flask.request.get_json(force=True) or {}
+    token = (body.get("token") or "").strip()
+    tokens = _load_tokens()
+    entry  = tokens.get(token)
+    if not entry or entry.get("uid") != uid:
+        return flask.jsonify({"ok": False, "error": "Token not found"}), 404
+
+    del tokens[token]
+    _save_tokens(tokens)
+
+    # Delete from Firestore too
+    fs_url = (f"https://firestore.googleapis.com/v1/projects/{FIREBASE_PROJECT}"
+              f"/databases/(default)/documents/users/{uid}/agent_tokens/{token}")
+    try:
+        req = _urllib_req.Request(fs_url, headers={"Authorization": f"Bearer {auth_header[7:]}"},
+                                  method="DELETE")
+        with _urllib_req.urlopen(req, timeout=10):
+            pass
+    except Exception:
+        pass  # best-effort; local file is already updated
+
+    return flask.jsonify({"ok": True})
 
 
 @app.route("/download/<path:filename>")

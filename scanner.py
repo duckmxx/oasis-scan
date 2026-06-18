@@ -490,31 +490,74 @@ def firebase_login(email, password):
         return None, err
 
 
-def firestore_save(id_token, uid, report):
+def firestore_save(id_token, uid, report, cves=None, counts=None):
     url = (f"https://firestore.googleapis.com/v1/projects/{FIREBASE_PROJECT}"
            f"/databases/(default)/documents/users/{uid}/scans")
-    # Build a minimal Firestore document with the key device fields
-    os_info = report["os"]
-    mem = report["memory"]["summary"]
-    cpu = report["cpu"]["summary"]
+    os_info  = report["os"]
+    mem      = report["memory"]["summary"]
+    cpu      = report["cpu"]["summary"]
+    pkgs     = report.get("packages", {})
+    pkg_list = (pkgs.get("packages") or [])[:1000]
+    foreign  = (pkgs.get("foreign")  or [])[:500]
+
+    def _s(v): return {"stringValue": str(v or "")}
+    def _i(v): return {"integerValue": str(int(v or 0))}
+
     doc = {
         "fields": {
-            "scanned_at":   {"stringValue": report["scanned_at"]},
-            "hostname":     {"stringValue": os_info.get("hostname", "")},
-            "os":           {"stringValue": os_info.get("pretty_name", "")},
-            "kernel":       {"stringValue": os_info.get("release", "")},
-            "arch":         {"stringValue": os_info.get("machine", "")},
-            "cpu":          {"stringValue": cpu.get("model_name", "")},
-            "cpu_cores":    {"integerValue": str(cpu.get("logical_cpus", 0))},
-            "mem_total":    {"integerValue": str(mem.get("total_bytes") or 0)},
-            "mem_available":{"integerValue": str(mem.get("available_bytes") or 0)},
-            "pkg_count":    {"integerValue": str(report["packages"].get("count") or 0)},
-            "pkg_manager":  {"stringValue": report["packages"].get("manager", "")},
-            "services_running": {"integerValue": str(len(report["services"].get("running", [])))},
-            "suid_count":   {"integerValue": str(len(report["suid_files"]))},
-            "distro_family":{"stringValue": report.get("distro_family", "")},
+            "scanned_at":       _s(report["scanned_at"]),
+            # createdAt as a proper Firestore timestamp so orderBy('createdAt') queries work
+            "createdAt":        {"timestampValue": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")},
+            "hostname":         _s(os_info.get("hostname")),
+            "os":               _s(os_info.get("pretty_name")),
+            "kernel":           _s(os_info.get("release")),
+            "arch":             _s(os_info.get("machine")),
+            "cpu":              _s(cpu.get("model_name")),
+            "cpu_cores":        _i(cpu.get("logical_cpus", 0)),
+            "mem_total":        _i(mem.get("total_bytes") or 0),
+            "mem_available":    _i(mem.get("available_bytes") or 0),
+            "pkg_count":        _i(pkgs.get("count") or 0),
+            "pkg_manager":      _s(pkgs.get("manager")),
+            "services_running": _i(len(report["services"].get("running", []))),
+            "suid_count":       _i(len(report["suid_files"])),
+            "distro_family":    _s(report.get("distro_family")),
+            # Package list — needed by the Applications tab on the web dashboard
+            "packages": {"arrayValue": {"values": [
+                {"mapValue": {"fields": {
+                    "name":    _s(p.get("name")),
+                    "version": _s(p.get("version")),
+                }}}
+                for p in pkg_list
+            ]}},
+            "foreign": {"arrayValue": {"values": [_s(f) for f in foreign]}},
         }
     }
+
+    if cves is not None and counts is not None:
+        doc["fields"]["critical"] = _i(counts.get("critical", 0))
+        doc["fields"]["high"]     = _i(counts.get("high", 0))
+        doc["fields"]["other"]    = _i((counts.get("medium", 0) + counts.get("low", 0)))
+        doc["fields"]["counts"]   = {"mapValue": {"fields": {
+            k: _i(v) for k, v in counts.items()
+        }}}
+        cve_values = []
+        for c in cves[:300]:
+            fields = {
+                "id":        _s(c.get("id")),
+                "package":   _s(c.get("package")),
+                "severity":  _s(c.get("severity", "unknown")),
+                "summary":   _s((c.get("summary") or "")[:400]),
+                "installed": _s(c.get("installed")),
+                "fixed":     _s(c.get("fixed")),
+                "url":       _s(c.get("url")),
+                "type":      _s(c.get("type")),
+                "vector":    _s(c.get("vector")),
+            }
+            if c.get("cvss") is not None:
+                fields["cvss"] = {"doubleValue": float(c["cvss"])}
+            cve_values.append({"mapValue": {"fields": fields}})
+        doc["fields"]["cves"] = {"arrayValue": {"values": cve_values}}
+
     body = json.dumps(doc).encode()
     req = urllib.request.Request(url, data=body, headers={
         "Content-Type": "application/json",

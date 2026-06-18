@@ -892,7 +892,7 @@ curl -O https://scanoasis.tech/download/gui.py</code></pre>
                 <span class="settings-label-desc">Connected language model</span>
               </div>
               <div class="settings-row-control">
-                <span class="settings-val-label mono" style="font-size:11px">Groq / llama-3.1-8b-instant</span>
+                <span class="settings-val-label mono" id="settings-ai-model" style="font-size:11px">—</span>
               </div>
             </div>
 
@@ -906,6 +906,30 @@ curl -O https://scanoasis.tech/download/gui.py</code></pre>
               </div>
             </div>
 
+          </div>
+        </div>
+      </div>
+
+      <!-- Agent Tokens -->
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title"><span class="icon">🔑</span> Agent Tokens</div>
+          <span class="text-muted" style="font-size:12px">Let gui.py agents sync without sharing your password</span>
+        </div>
+        <div class="panel-body">
+          <div class="settings-group">
+            <div class="settings-row" style="align-items:flex-start;flex-direction:column;gap:12px">
+              <div style="display:flex;gap:8px;width:100%;align-items:center">
+                <input id="token-name-input"
+                       placeholder="Label (e.g. John's laptop)"
+                       style="flex:1;background:var(--bg-deep);border:1px solid var(--border);border-radius:6px;padding:7px 12px;color:var(--text-primary);font-size:13px;outline:none;min-width:0">
+                <button class="btn btn-primary btn-sm" id="create-token-btn">+ Generate</button>
+              </div>
+              <div id="token-new-result" style="display:none;width:100%"></div>
+              <div id="token-list" style="width:100%">
+                <div class="text-muted" style="font-size:12px;padding:4px 0">Loading…</div>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -985,15 +1009,31 @@ curl -O https://scanoasis.tech/download/gui.py</code></pre>
       // Load scan history, devices, and tags from Firestore
       loadScanHistory(user.uid);
       // Render scanned systems, then overlay LAN devices discovered by the agent.
-      loadDevices(user.uid).then(() => window.__loadDiscovered?.());
+      // After devices load, refresh the CVE tab if it's already open — fixes the
+      // timing race where renderAllCVEs() fires before __deviceCache is populated.
+      loadDevices(user.uid).then(() => {
+        window.__loadDiscovered?.();
+        const cveSection = document.getElementById('section-cves');
+        if (cveSection && !cveSection.classList.contains('hidden')) {
+          window.__renderAllCVEs?.();
+        }
+      });
       loadDeviceTags(user.uid);
-      window.__loadDevices = () => loadDevices(user.uid).then(() => window.__loadDiscovered?.());
+      window.__loadDevices = () => loadDevices(user.uid).then(() => {
+        window.__loadDiscovered?.();
+        window.__renderAllCVEs?.();
+      });
 
       // Restore last scan's CVE + topology data, then auto-run a fresh scan
       window.__loadLastScanData(user.uid).then(data => {
         window.__savedData = data;
         if (data && typeof window.__onSavedDataReady === 'function') {
           window.__onSavedDataReady(data);
+        }
+        // Refresh CVE tab now that __savedData is available
+        const cveSection = document.getElementById('section-cves');
+        if (cveSection && !cveSection.classList.contains('hidden')) {
+          window.__renderAllCVEs?.();
         }
         // Auto-scan once on page load — in the background so cached results show
         // instantly and the dashboard doesn't sit behind a blocking overlay.
@@ -1003,11 +1043,21 @@ curl -O https://scanoasis.tech/download/gui.py</code></pre>
 
     async function loadScanHistory(uid) {
       try {
-        const q = query(collection(db, 'users', uid, 'scans'), orderBy('createdAt', 'desc'));
-        const snap = await getDocs(q);
+        // Use a plain collection fetch (no orderBy) so gui.py scans (which have
+        // scanned_at but no createdAt Firestore timestamp) are included.
+        const snap = await getDocs(collection(db, 'users', uid, 'scans'));
         const historyEl = document.getElementById('overview-history');
-        if (!historyEl) return;
-        if (snap.empty) return;
+        if (!historyEl || snap.empty) return;
+
+        // Sort locally: prefer createdAt Firestore timestamp, fall back to scanned_at string
+        const rows = [];
+        snap.forEach(doc => {
+          const d = doc.data();
+          const ts = d.createdAt?.toDate?.()?.getTime?.()
+                   ?? (d.scanned_at ? new Date(d.scanned_at).getTime() : 0);
+          rows.push({ d, ts });
+        });
+        rows.sort((a, b) => b.ts - a.ts);
 
         historyEl.classList.add('no-pad');
         historyEl.innerHTML = '';
@@ -1015,9 +1065,8 @@ curl -O https://scanoasis.tech/download/gui.py</code></pre>
         table.className = 'cve-table';
         table.innerHTML = `<thead><tr><th>Date</th><th>Host</th><th>Critical</th><th>High</th><th>Medium/Low</th><th>Apps</th></tr></thead><tbody></tbody>`;
         const tbody = table.querySelector('tbody');
-        snap.forEach(doc => {
-          const d = doc.data();
-          const date = d.createdAt?.toDate?.()?.toLocaleString() ?? '—';
+        rows.forEach(({ d, ts }) => {
+          const date = ts ? new Date(ts).toLocaleString() : '—';
           const host = d.hostname || '—';
           const apps = d.apps ?? d.pkg_count ?? 0;
           const tr = document.createElement('tr');
@@ -1141,23 +1190,30 @@ curl -O https://scanoasis.tech/download/gui.py</code></pre>
     // Load the most recent scan's CVE + topology data (restored on page load)
     window.__loadLastScanData = async function(uid) {
       try {
-        const q    = query(collection(db, 'users', uid, 'scans'), orderBy('createdAt', 'desc'));
-        const snap = await getDocs(q);
-        for (const doc of snap.docs) {
+        // Plain collection fetch — no orderBy so gui.py scans (scanned_at only,
+        // no createdAt Firestore timestamp) are not silently excluded.
+        const snap = await getDocs(collection(db, 'users', uid, 'scans'));
+        let best = null, bestTs = -1;
+        snap.forEach(doc => {
           const d = doc.data();
-          if (d.counts !== undefined || Array.isArray(d.cves)) {
-            return {
-              cves:        d.cves     ?? [],
-              counts:      d.counts   ?? { critical: d.critical??0, high: d.high??0, medium: 0, low: 0, unknown: 0 },
-              topology:    d.topology ?? null,
-              hostname:    d.hostname ?? '',
-              os:          d.os       ?? '',
-              kernel:      d.kernel   ?? '',
-              cpu:         d.cpu      ?? '',
-              pkg_count:   d.pkg_count  ?? 0,
-              pkg_manager: d.pkg_manager ?? '',
-            };
-          }
+          if (d.counts === undefined && !Array.isArray(d.cves)) return;
+          const ts = d.createdAt?.toDate?.()?.getTime?.()
+                   ?? (d.scanned_at ? new Date(d.scanned_at).getTime() : 0);
+          if (ts > bestTs) { bestTs = ts; best = d; }
+        });
+        if (best) {
+          return {
+            cves:          best.cves         ?? [],
+            counts:        best.counts       ?? { critical: best.critical??0, high: best.high??0, medium: 0, low: 0, unknown: 0 },
+            topology:      best.topology     ?? null,
+            hostname:      best.hostname     ?? '',
+            os:            best.os           ?? '',
+            kernel:        best.kernel       ?? '',
+            cpu:           best.cpu          ?? '',
+            pkg_count:     best.pkg_count    ?? 0,
+            pkg_manager:   best.pkg_manager  ?? '',
+            distro_family: best.distro_family ?? '',
+          };
         }
       } catch (e) {
         console.error('loadLastScanData failed', e);
@@ -1170,18 +1226,22 @@ curl -O https://scanoasis.tech/download/gui.py</code></pre>
       const user = auth.currentUser;
       if (!user) return null;
       try {
-        const q    = query(collection(db, 'users', user.uid, 'scans'), orderBy('createdAt', 'desc'));
-        const snap = await getDocs(q);
-        for (const doc of snap.docs) {
+        const snap = await getDocs(collection(db, 'users', user.uid, 'scans'));
+        let best = null, bestTs = -1;
+        snap.forEach(doc => {
           const d = doc.data();
-          if (Array.isArray(d.packages) && d.packages.length > 0) {
-            return {
-              packages: d.packages,
-              foreign:  d.foreign  ?? [],
-              count:    d.pkg_count ?? d.packages.length,
-              manager:  d.pkg_manager ?? '',
-            };
-          }
+          if (!Array.isArray(d.packages) || d.packages.length === 0) return;
+          const ts = d.createdAt?.toDate?.()?.getTime?.()
+                   ?? (d.scanned_at ? new Date(d.scanned_at).getTime() : 0);
+          if (ts > bestTs) { bestTs = ts; best = d; }
+        });
+        if (best) {
+          return {
+            packages: best.packages,
+            foreign:  best.foreign  ?? [],
+            count:    best.pkg_count ?? best.packages.length,
+            manager:  best.pkg_manager ?? '',
+          };
         }
       } catch (e) {
         console.error('loadPackages failed', e);
@@ -1405,6 +1465,152 @@ curl -O https://scanoasis.tech/download/gui.py</code></pre>
         return snap.exists() ? snap.data() : null;
       } catch (e) { return null; }
     };
+
+    // ── Agent token metadata (token value only stored server-side) ───────────
+    window.__saveAgentTokenMeta = async function(token, name) {
+      const user = auth.currentUser;
+      if (!user) return;
+      try {
+        await setDoc(doc(db, 'users', user.uid, 'agent_tokens', token), {
+          name, createdAt: serverTimestamp(),
+        });
+      } catch (e) { console.error('saveAgentTokenMeta failed', e); }
+    };
+
+    window.__listAgentTokens = async function() {
+      const user = auth.currentUser;
+      if (!user) return [];
+      try {
+        const snap = await getDocs(collection(db, 'users', user.uid, 'agent_tokens'));
+        return snap.docs.map(d => ({ token: d.id, ...d.data() }));
+      } catch (e) { return []; }
+    };
+
+    window.__deleteAgentTokenMeta = async function(token) {
+      const user = auth.currentUser;
+      if (!user) return;
+      try {
+        await deleteDoc(doc(db, 'users', user.uid, 'agent_tokens', token));
+      } catch (e) { console.error('deleteAgentTokenMeta failed', e); }
+    };
+
+    // ── Token panel UI ───────────────────────────────────────────────────────
+    const _esc = s => String(s ?? '').replace(/[&<>"']/g, c =>
+      ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+    async function _refreshTokenList() {
+      const list = document.getElementById('token-list');
+      if (!list) return;
+      const tokens = await window.__listAgentTokens();
+      if (!tokens.length) {
+        list.innerHTML = '<div class="text-muted" style="font-size:12px;padding:4px 0">No tokens yet. Generate one above.</div>';
+        return;
+      }
+      list.innerHTML = tokens.map(t => {
+        // createdAt is a Firestore Timestamp if written by JS; 'created' is an ISO string if written by Flask.
+        const date = t.createdAt?.toDate?.()?.toLocaleDateString()
+                  ?? (t.created ? new Date(t.created).toLocaleDateString() : '—');
+        const hint = t.token.slice(0, 8) + '…';
+        return `<div style="display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--border)">
+          <span style="flex:1;font-size:13px">${_esc(t.name || 'Agent')}</span>
+          <code class="mono" style="font-size:11px;color:var(--text-muted)">${_esc(hint)}</code>
+          <span style="font-size:11px;color:var(--text-muted)">${_esc(date)}</span>
+          <button class="btn btn-danger btn-sm" data-revoke-token="${_esc(t.token)}">Revoke</button>
+        </div>`;
+      }).join('');
+      list.querySelectorAll('[data-revoke-token]').forEach(btn => {
+        btn.addEventListener('click', () => _revokeToken(btn.dataset.revokeToken));
+      });
+    }
+
+    async function _revokeToken(token) {
+      const user = auth.currentUser;
+      if (!user) return;
+      if (!confirm('Revoke this token? Any agent using it will lose access.')) return;
+      try {
+        const idToken = await user.getIdToken();
+        const r = await fetch('/api/admin/revoke-token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + idToken },
+          body: JSON.stringify({ token }),
+        });
+        const d = await r.json();
+        if (d.ok) {
+          await window.__deleteAgentTokenMeta(token);
+          _refreshTokenList();
+        } else {
+          alert('Revoke failed: ' + (d.error || 'unknown error'));
+        }
+      } catch (e) { alert('Revoke failed: ' + e.message); }
+    }
+
+    document.getElementById('create-token-btn')?.addEventListener('click', async () => {
+      const user = auth.currentUser;
+      if (!user) return;
+      const nameInput = document.getElementById('token-name-input');
+      const resultEl  = document.getElementById('token-new-result');
+      const btn       = document.getElementById('create-token-btn');
+      const name      = (nameInput?.value || '').trim() || 'Agent';
+      btn.disabled    = true;
+      try {
+        const idToken      = await user.getIdToken();
+        const refreshToken = user.refreshToken;
+        if (!refreshToken) throw new Error('Could not read refresh token — please sign out and back in');
+        const r = await fetch('/api/admin/create-token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + idToken },
+          body: JSON.stringify({ name, refresh_token: refreshToken }),
+        });
+        const d = await r.json();
+        if (!d.ok) throw new Error(d.error || 'Server error');
+        // Flask already wrote full token data (including refresh_token) to Firestore.
+        // No need to call __saveAgentTokenMeta here — it would overwrite the refresh_token field.
+        if (nameInput) nameInput.value = '';
+        if (resultEl) {
+          resultEl.style.display = 'block';
+          resultEl.innerHTML = `
+            <div style="background:var(--bg-card);border:1px solid var(--border-accent);border-radius:6px;padding:12px;margin-bottom:4px">
+              <div style="font-size:12px;color:var(--text-secondary);margin-bottom:8px">Token created — copy it now, you won't see it again:</div>
+              <div style="display:flex;gap:8px;align-items:center">
+                <code class="mono" style="font-size:11px;background:var(--bg-deep);padding:6px 10px;border-radius:4px;flex:1;word-break:break-all;user-select:all">${_esc(d.token)}</code>
+                <button class="btn btn-ghost btn-sm" id="copy-token-btn">Copy</button>
+              </div>
+              <div style="font-size:11px;color:var(--text-muted);margin-top:8px">
+                Use in gui.py → <em>Sign in with agent token</em><br>
+                Server URL: <code class="mono">${_esc(location.origin)}</code>
+              </div>
+              <button class="btn btn-ghost btn-sm" style="margin-top:8px;font-size:11px" id="dismiss-token-result">Dismiss</button>
+            </div>`;
+          document.getElementById('copy-token-btn')?.addEventListener('click', function() {
+            navigator.clipboard.writeText(d.token).then(() => { this.textContent = 'Copied!'; });
+          });
+          document.getElementById('dismiss-token-result')?.addEventListener('click', () => {
+            resultEl.style.display = 'none';
+          });
+        }
+        _refreshTokenList();
+      } catch (e) {
+        if (resultEl) {
+          resultEl.style.display = 'block';
+          resultEl.innerHTML = `<div style="color:var(--sev-critical);font-size:12px;padding:4px 0">Error: ${_esc(e.message)}</div>`;
+        }
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
+    // Load token list when the settings nav item is clicked
+    document.querySelectorAll('.nav-item[data-section]').forEach(el => {
+      if (el.dataset.section === 'section-settings')
+        el.addEventListener('click', _refreshTokenList);
+    });
+
+    // Populate AI model name from server (avoids hardcoding)
+    fetch('/api/info').then(r => r.json()).then(d => {
+      const el = document.getElementById('settings-ai-model');
+      if (el && d.model) el.textContent = 'Groq / ' + d.model;
+    }).catch(() => {});
+
   </script>
   <!-- =====================================================
        DEVICE DETAIL MODAL (slide-over)
