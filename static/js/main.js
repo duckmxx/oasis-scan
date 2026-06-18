@@ -8,7 +8,6 @@ let _statusLbl     = null;
 let _lastReport    = null;
 let _cveData       = null;   // set by runCVEAnalysis; used by topology map
 let _savedTopology = null;   // set when saved data is loaded from Firestore
-let _integrityHost = '';     // hostname currently shown in System Audit
 
 // Called by Firebase module once saved scan data is fetched from Firestore
 window.__onSavedDataReady = function(data) {
@@ -164,9 +163,6 @@ document.querySelectorAll('.nav-item[data-section]').forEach(item => {
           });
         }
       }
-    }
-    if (target === 'section-integrity') {
-      window.__refreshIntegrityDevices?.();   // build selector + show a device
     }
     const label = item.textContent.replace(/[⊞⚠⊡⊟⬡◇✚▷⊙✦↺]/g, '').trim();
     const titleEl = document.getElementById('topbar-section-label');
@@ -410,86 +406,37 @@ async function runCVEAnalysis(report) {
 // itself). Integrity data now comes only from the desktop agents via Firestore
 // and is rendered by populateIntegrity() / the System Audit device selector.
 
-// Rebuild the System Audit device selector from the `integrity` collection and
-// keep the shown device valid. Called on tab entry, after a device is purged
-// (pass the deleted hostname), and by the realtime `integrity` listener — so a
-// deleted device disappears here too. Single source of truth for the selector.
-window.__refreshIntegrityDevices = async function(deletedHost) {
-  const toolbar = document.getElementById('integrity-toolbar');
-  const chipBox = document.getElementById('integrity-dev-chips');
-  if (!toolbar || !chipBox || typeof window.__loadIntegrityDevices !== 'function') return;
-  const devices = await window.__loadIntegrityDevices();
-  const prefix  = `<span style="font-size:11px;color:var(--text-muted);margin-right:4px">Device:</span>`;
+// The System Audit page was removed; its panels (malicious packages + modified
+// binaries) now live in the Packages tab and are filled by _loadDeviceIntegrity()
+// for the selected device. populateIntegrity() renders those tables + the
+// Overview "Security Posture" summary.
+window.__refreshIntegrityDevices = function() { /* selector removed with the page */ };
 
-  if (deletedHost && _integrityHost === deletedHost) _integrityHost = '';
-
-  if (devices.length > 1) {
-    const active = devices.some(d => d.hostname === _integrityHost) ? _integrityHost : devices[0].hostname;
-    chipBox.innerHTML = prefix + devices.map(d => {
-      const tag = window.__deviceTags?.[d.hostname] || '';
-      return `<button class="sec-dev-chip${d.hostname === active ? ' active' : ''}" data-host="${escapeHtml(d.hostname)}">${escapeHtml(tag || d.hostname)}</button>`;
-    }).join('');
-    toolbar.classList.remove('hidden');
-    chipBox.querySelectorAll('.sec-dev-chip[data-host]').forEach(chip => {
-      chip.addEventListener('click', async () => {
-        chipBox.querySelectorAll('.sec-dev-chip').forEach(c => c.classList.remove('active'));
-        chip.classList.add('active');
-        chip.textContent = '…';
-        const data = await window.__loadIntegrityData(chip.dataset.host);
-        chip.textContent = escapeHtml(window.__deviceTags?.[chip.dataset.host] || chip.dataset.host);
-        if (data) populateIntegrity(data, chip.dataset.host);
-      });
-    });
-  } else if (devices.length === 1) {
-    const h = devices[0].hostname, tag = window.__deviceTags?.[h] || '';
-    chipBox.innerHTML = `${prefix}<span class="sec-dev-chip active" style="cursor:default">${escapeHtml(tag || h)}</span>`;
-    toolbar.classList.remove('hidden');
-  } else {
-    chipBox.innerHTML = '';
-    toolbar.classList.add('hidden');
+// Load + render a device's integrity data into the Packages-tab panels.
+async function _loadDeviceIntegrity(hostname) {
+  const empty = (id, cols, msg) => {
+    const el = document.getElementById(id);
+    if (el) el.innerHTML = `<tr><td colspan="${cols}"><div class="empty-state"><div class="empty-icon">⊡</div><div>${msg}</div></div></td></tr>`;
+  };
+  if (!hostname || hostname === '__current__' || typeof window.__loadIntegrityData !== 'function') {
+    empty('integrity-bin-tbody', 4, 'No integrity data for this device.');
+    empty('integrity-mal-tbody', 5, 'No malicious packages detected for this device.');
+    return;
   }
-
-  // Make sure the panel shows a valid device (first load, or after deleting the
-  // one being viewed). Clear the tables when nothing is left.
-  if (!_integrityHost && devices.length >= 1) {
-    const data = await window.__loadIntegrityData(devices[0].hostname);
-    if (data) populateIntegrity(data, devices[0].hostname);
-  } else if (devices.length === 0) {
-    _integrityHost = '';
-    ['integrity-mal-tbody', 'integrity-bin-tbody', 'integrity-suid-tbody'].forEach(id => {
-      const el = document.getElementById(id);
-      if (el) el.innerHTML = `<tr><td colspan="5"><div class="empty-state"><div class="empty-icon">⊡</div><div>No device data.</div></div></td></tr>`;
-    });
+  const data = await window.__loadIntegrityData(hostname);
+  if (data) populateIntegrity(data, hostname);
+  else {
+    empty('integrity-bin-tbody', 4, 'No integrity data for this device.');
+    empty('integrity-mal-tbody', 5, 'No malicious packages detected for this device.');
   }
-};
+}
 
 function populateIntegrity(data, hostname) {
-  if (hostname) _integrityHost = hostname;   // track the shown device
   const sum  = data.summary       ?? {};
   const mal  = data.malicious     ?? [];
   const bins = data.modified_bins ?? [];
   const suid = data.suid_files    ?? [];
   const svcs = data.services      ?? [];
-
-  // Device chip — do NOT rebuild the multi-device selector here, or switching
-  // devices would wipe the other chips (the bug where viewing host B deleted
-  // host A's chip). Just mark the active one; only build a single static chip
-  // when no selector exists yet.
-  if (hostname) {
-    const toolbar = document.getElementById('integrity-toolbar');
-    const chipBox = document.getElementById('integrity-dev-chips');
-    if (toolbar && chipBox) {
-      const existing = chipBox.querySelectorAll('.sec-dev-chip[data-host]');
-      if (existing.length) {
-        existing.forEach(c => c.classList.toggle('active', c.dataset.host === hostname));
-      } else {
-        const tag = window.__deviceTags?.[hostname] || '';
-        chipBox.innerHTML = `<span style="font-size:11px;color:var(--text-muted);margin-right:4px">Device:</span>
-          <span class="sec-dev-chip active" style="cursor:default">${escapeHtml(tag || hostname)}</span>`;
-      }
-      toolbar.classList.remove('hidden');
-    }
-  }
 
   // Banner — keyed off malicious/modified_bins; file integrity removed
   const banner = document.getElementById('integrity-banner');
@@ -747,6 +694,10 @@ function _renderPackageRisk(hostname) {
       if (arrow) arrow.textContent = body.classList.contains('hidden') ? '▶' : '▼';
     });
   }
+
+  // System integrity for this device (moved here from the old System Audit page):
+  // fills the Modified-Binaries + Malicious-Packages panels below the packages.
+  _loadDeviceIntegrity(hostname);
 }
 
 function _buildVulnPackageMap(hostname) {

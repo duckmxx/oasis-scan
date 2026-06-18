@@ -331,20 +331,38 @@ def api_tts():
 
 _DOWNLOAD_WHITELIST = {"gui.py", "scanner.py", "tts_server.py"}
 _BASE_DIR   = _os.path.dirname(_os.path.abspath(__file__))
-_TOKEN_FILE = _os.path.join(_BASE_DIR, 'agent_tokens.json')
+# IMPORTANT (production): this file is the durable map of token -> owner creds and
+# the `_fallback` bootstrap used to restore tokens from Firestore. On an ephemeral
+# droplet the default path is WIPED on every redeploy/restart, which makes all
+# agent tokens fail with "Invalid token" for anyone who didn't create them on the
+# live instance. Point AGENT_TOKEN_FILE at a persistent volume so tokens survive.
+_TOKEN_FILE = _os.environ.get("AGENT_TOKEN_FILE") or _os.path.join(_BASE_DIR, 'agent_tokens.json')
 
 
 def _load_tokens() -> dict:
     try:
         with open(_TOKEN_FILE) as f:
-            return json.load(f)
+            tokens = json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
-        return {}
+        tokens = {}
+    # Durable bootstrap: if the token file was lost (ephemeral instance) and so the
+    # `_fallback` is gone, seed it from env. This lets ANY instance resolve any
+    # token already stored in Firestore — set these once on the droplet:
+    #   AGENT_FALLBACK_UID, AGENT_FALLBACK_REFRESH_TOKEN
+    if "_fallback" not in tokens:
+        env_uid = _os.environ.get("AGENT_FALLBACK_UID")
+        env_rt  = _os.environ.get("AGENT_FALLBACK_REFRESH_TOKEN")
+        if env_uid and env_rt:
+            tokens["_fallback"] = {"uid": env_uid, "refresh_token": env_rt}
+    return tokens
 
 
 def _save_tokens(tokens: dict):
-    with open(_TOKEN_FILE, 'w') as f:
-        json.dump(tokens, f, indent=2)
+    try:
+        with open(_TOKEN_FILE, 'w') as f:
+            json.dump(tokens, f, indent=2)
+    except OSError as e:
+        print(f"[agent-tokens] WARNING: could not persist {_TOKEN_FILE}: {e}")
 
 
 def _verify_firebase_token(id_token: str):
@@ -455,6 +473,12 @@ def api_agent_auth():
                     _save_tokens(tokens)
 
     if not entry:
+        # Distinguish "bad token" from "server lost its bootstrap" so the owner
+        # knows to set AGENT_TOKEN_FILE / AGENT_FALLBACK_* rather than re-issue.
+        if "_fallback" not in tokens:
+            return flask.jsonify({"ok": False, "error":
+                "Server can't resolve tokens — its token store was reset and no "
+                "bootstrap is configured (set AGENT_TOKEN_FILE or AGENT_FALLBACK_*)."}), 503
         return flask.jsonify({"ok": False, "error": "Invalid token"}), 401
 
     id_token, uid = _refresh_firebase_token(entry["refresh_token"])

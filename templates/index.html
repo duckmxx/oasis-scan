@@ -36,10 +36,6 @@
         <span class="nav-icon">⚠</span> CVEs
         <span class="nav-badge hidden" id="nav-cve-badge">0</span>
       </li>
-      <li class="nav-item" data-section="section-integrity">
-        <span class="nav-icon">◇</span> System Audit
-        <span class="nav-badge hidden" id="nav-integrity-badge">!</span>
-      </li>
       <li class="nav-item" data-section="section-apps">
         <span class="nav-icon">⊡</span> Packages
       </li>
@@ -155,7 +151,6 @@
         <div class="panel">
           <div class="panel-header">
             <div class="panel-title"><span class="icon">◇</span> Security Posture</div>
-            <button class="btn btn-ghost btn-sm" data-jump="section-integrity">System Audit →</button>
           </div>
           <div class="panel-body">
             <div class="posture-summary" id="overview-integrity">
@@ -201,124 +196,6 @@
           <div class="empty-state">
             <div class="empty-icon">↺</div>
             <div>No scans recorded yet — run a scan to start building history.</div>
-          </div>
-        </div>
-      </div>
-
-    </section>
-
-    <!-- ===================================================
-         SECTION: SYSTEM AUDIT
-         =================================================== -->
-    <section class="page-section hidden" id="section-integrity">
-
-      <!-- Device selector (shown when multiple devices have audit data) -->
-      <div class="sec-toolbar hidden" id="integrity-toolbar">
-        <div class="sec-dev-chips" id="integrity-dev-chips"></div>
-      </div>
-
-      <!-- Summary banner -->
-      <div class="integrity-banner" id="integrity-banner">
-        <div class="integrity-banner-icon" id="integrity-banner-icon">⬡</div>
-        <div>
-          <div class="integrity-banner-title" id="integrity-banner-title">Run a scan to audit system security</div>
-          <div class="integrity-banner-sub"   id="integrity-banner-sub">Checks for malicious packages, recently modified system binaries, SUID files, and running services.</div>
-        </div>
-      </div>
-
-      <!-- Known Malicious Packages -->
-      <div class="panel">
-        <div class="panel-header">
-          <div class="panel-title"><span class="icon">◆</span> Known Malicious Packages</div>
-          <span class="text-muted" style="font-size:12px" id="integrity-mal-count">—</span>
-        </div>
-        <div class="panel-body no-pad">
-          <table class="cve-table">
-            <thead>
-              <tr>
-                <th>ID</th>
-                <th>Package</th>
-                <th>Version</th>
-                <th>Summary</th>
-                <th>Link</th>
-              </tr>
-            </thead>
-            <tbody id="integrity-mal-tbody">
-              <tr><td colspan="5">
-                <div class="empty-state">
-                  <div class="empty-icon">◆</div>
-                  <div>Run a scan to check for malicious packages.</div>
-                </div>
-              </td></tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      <!-- Recently modified binaries -->
-      <div class="panel">
-        <div class="panel-header">
-          <div class="panel-title"><span class="icon">⏱</span> Recently Modified System Binaries</div>
-          <span class="text-muted" style="font-size:12px" id="integrity-bin-count">—</span>
-        </div>
-        <div class="panel-body no-pad">
-          <table class="cve-table">
-            <thead>
-              <tr>
-                <th>File</th>
-                <th>Package</th>
-                <th>Modified</th>
-                <th>Age</th>
-              </tr>
-            </thead>
-            <tbody id="integrity-bin-tbody">
-              <tr><td colspan="4">
-                <div class="empty-state">
-                  <div class="empty-icon">⏱</div>
-                  <div>Run a scan to detect recently modified binaries.</div>
-                </div>
-              </td></tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      <!-- SUID Files -->
-      <div class="panel">
-        <div class="panel-header">
-          <div class="panel-title"><span class="icon">⚑</span> SUID Files</div>
-          <span class="text-muted" style="font-size:12px" id="integrity-suid-count">—</span>
-        </div>
-        <div class="panel-body no-pad">
-          <table class="cve-table">
-            <thead>
-              <tr>
-                <th>Path</th>
-                <th>File</th>
-              </tr>
-            </thead>
-            <tbody id="integrity-suid-tbody">
-              <tr><td colspan="2">
-                <div class="empty-state">
-                  <div class="empty-icon">⚑</div>
-                  <div>Run a scan to enumerate SUID files.</div>
-                </div>
-              </td></tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      <!-- Running Services -->
-      <div class="panel">
-        <div class="panel-header">
-          <div class="panel-title"><span class="icon">⊙</span> Running Services</div>
-          <span class="text-muted" style="font-size:12px" id="integrity-svc-count">—</span>
-        </div>
-        <div class="panel-body" id="integrity-svc-body">
-          <div class="empty-state">
-            <div class="empty-icon">⊙</div>
-            <div>Run a scan to list running services.</div>
           </div>
         </div>
       </div>
@@ -508,6 +385,45 @@
               <div>No packages scanned yet.</div>
             </div>
           </div>
+        </div>
+      </div>
+
+      <!-- System integrity (moved here from the old System Audit page) -->
+      <!-- Recently modified binaries — the "gpg checksum mismatch" findings -->
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title"><span class="icon">⏱</span> Recently Modified / Tampered Binaries</div>
+          <span class="text-muted" style="font-size:12px" id="integrity-bin-count">—</span>
+        </div>
+        <div class="panel-body no-pad">
+          <table class="cve-table">
+            <thead><tr><th>File</th><th>Package</th><th>Modified</th><th>Age</th></tr></thead>
+            <tbody id="integrity-bin-tbody">
+              <tr><td colspan="4"><div class="empty-state">
+                <div class="empty-icon">⏱</div>
+                <div>No integrity data for this device.</div>
+              </div></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Known malicious packages -->
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title"><span class="icon">◆</span> Known Malicious Packages</div>
+          <span class="text-muted" style="font-size:12px" id="integrity-mal-count">—</span>
+        </div>
+        <div class="panel-body no-pad">
+          <table class="cve-table">
+            <thead><tr><th>ID</th><th>Package</th><th>Version</th><th>Summary</th><th>Link</th></tr></thead>
+            <tbody id="integrity-mal-tbody">
+              <tr><td colspan="5"><div class="empty-state">
+                <div class="empty-icon">◆</div>
+                <div>No malicious packages detected for this device.</div>
+              </div></td></tr>
+            </tbody>
+          </table>
         </div>
       </div>
 
@@ -1367,7 +1283,7 @@ curl -O https://scanoasis.tech/download/gui.py</code></pre>
     }
     function _startRealtime(uid) {
       _stopRealtime();   // guard against double-subscribe if auth fires twice
-      let netFirst = true, scanFirst = true, intFirst = true;
+      let netFirst = true, scanFirst = true;
       _rtUnsubs.push(onSnapshot(
         collection(db, 'users', uid, 'network_devices'),
         snap => {
@@ -1392,16 +1308,6 @@ curl -O https://scanoasis.tech/download/gui.py</code></pre>
           });
         },
         err => console.error('scans listener', err)
-      ));
-      _rtUnsubs.push(onSnapshot(
-        collection(db, 'users', uid, 'integrity'),
-        () => {
-          if (intFirst) { intFirst = false; return; }
-          // Integrity doc added/deleted (e.g. a device was purged) — keep the
-          // System Audit device selector in sync.
-          window.__refreshIntegrityDevices?.();
-        },
-        err => console.error('integrity listener', err)
       ));
     }
     window.__stopRealtime = _stopRealtime;
@@ -1482,8 +1388,6 @@ curl -O https://scanoasis.tech/download/gui.py</code></pre>
         delete window.__deviceCache?.[hostname];
         delete window.__deviceTags?.[hostname];
         delete window.__deviceNotes?.[hostname];
-        // Sync the System Audit device selector (drops the chip immediately)
-        window.__refreshIntegrityDevices?.(hostname);
         return { ok: true, deleted: ss.size };
       } catch (e) {
         console.error('Failed to purge device', e);
