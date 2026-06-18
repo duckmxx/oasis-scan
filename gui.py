@@ -13,6 +13,7 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import scanner as _sc
+import net_discovery as _nd
 
 # ── Palette (mirrors the web dashboard) ──────────────────────────────────────
 BG     = "#08090e"
@@ -25,8 +26,20 @@ TEXT   = "#e2e8f0"
 TSEC   = "#8892a4"
 TMUT   = "#4a5568"
 ACCENT = "#00d4ff"
+ACCENT_HI = "#33ddff"
 ERR    = "#ff3860"
 OK     = "#27c93f"
+
+# ── Typography (Inter throughout; mono only for technical values) ────────────
+FONT     = "Inter"
+MONO     = "JetBrains Mono"
+F_TITLE  = (FONT, 22, "bold")
+F_H1     = (FONT, 15, "bold")
+F_H2     = (FONT, 12, "bold")
+F_LABEL  = (FONT, 9, "bold")
+F_BODY   = (FONT, 11)
+F_SMALL  = (FONT, 9)
+F_SECTION = (FONT, 8, "bold")
 
 SCAN_STEPS = [
     "Collecting OS information…",
@@ -69,7 +82,7 @@ class App(tk.Tk):
         self.protocol("WM_DELETE_WINDOW", self.destroy)
         self._creds: tuple[str, str] | None = None   # (token, uid)
         self._frame: tk.Frame | None = None
-        self._center(480, 560)
+        self._center(520, 640)
         self._switch(LoginFrame)
 
     def _center(self, w: int, h: int):
@@ -94,40 +107,39 @@ class LoginFrame(tk.Frame):
     def _build(self):
         _topbar(self)
 
-        # ── Logo ──────────────────────────────────────────────────────────────
+        # ── Logo / wordmark ────────────────────────────────────────────────────
         top = tk.Frame(self, bg=BG)
-        top.pack(pady=(36, 0))
+        top.pack(pady=(56, 0))
         logo = _logo(48)
         if logo:
             lg = tk.Label(top, image=logo, bg=BG)
             lg.image = logo
             lg.pack()
         else:
-            tk.Label(top, text="⬡", font=("Inter", 38),
-                     bg=BG, fg=ACCENT).pack()
-        tk.Label(top, text="Scan Oasis", font=("Inter", 21, "bold"),
-                 bg=BG, fg=TEXT).pack(pady=(3, 0))
-        tk.Label(top, text="Sign in to your account",
-                 font=("Inter", 10), bg=BG, fg=TSEC).pack(pady=(3, 0))
+            _glyph(top, "shield", 40, ACCENT, BG).pack()
+        tk.Label(top, text="Scan Oasis", font=F_TITLE,
+                 bg=BG, fg=TEXT).pack(pady=(14, 0))
+        tk.Label(top, text="Sign in to continue",
+                 font=F_BODY, bg=BG, fg=TSEC).pack(pady=(6, 0))
 
         # ── Card ──────────────────────────────────────────────────────────────
         card = tk.Frame(self, bg=PANEL,
                         highlightbackground=BORDER, highlightthickness=1)
-        card.pack(padx=48, pady=30, fill="x")
+        card.pack(padx=56, pady=(40, 0), fill="x")
         inn = tk.Frame(card, bg=PANEL)
-        inn.pack(padx=28, pady=28, fill="x")
+        inn.pack(padx=34, pady=34, fill="x")
 
         # Email
-        tk.Label(inn, text="Email", font=("Inter", 9, "bold"),
+        tk.Label(inn, text="EMAIL", font=F_LABEL,
                  bg=PANEL, fg=TSEC).pack(anchor="w")
         self._email = Entry(inn, placeholder="you@example.com")
-        self._email.pack(fill="x", pady=(4, 14))
+        self._email.pack(fill="x", pady=(8, 20))
 
         # Password
-        tk.Label(inn, text="Password", font=("Inter", 9, "bold"),
+        tk.Label(inn, text="PASSWORD", font=F_LABEL,
                  bg=PANEL, fg=TSEC).pack(anchor="w")
         self._pw = Entry(inn, placeholder="••••••••", show="•")
-        self._pw.pack(fill="x", pady=(4, 22))
+        self._pw.pack(fill="x", pady=(8, 28))
 
         # Button
         self._btn = Btn(inn, "Sign In", self._submit)
@@ -240,9 +252,9 @@ class ScanFrame(tk.Frame):
         # Signed-in-as pill
         pill = tk.Frame(center, bg=CARD,
                         highlightbackground=BORDA, highlightthickness=1)
-        pill.pack(pady=(0, 38))
+        pill.pack(pady=(0, 46))
         tk.Label(pill, text=f"  {self._email}  ",
-                 font=("Inter", 9), bg=CARD, fg=TSEC, pady=7).pack()
+                 font=F_SMALL, bg=CARD, fg=TSEC, pady=8).pack()
 
         # Spinner canvas
         self._cv = tk.Canvas(center, width=96, height=96,
@@ -251,10 +263,10 @@ class ScanFrame(tk.Frame):
 
         # Title + step label
         tk.Label(center, text="Running Scan Oasis",
-                 font=("Inter", 15, "bold"), bg=BG, fg=TEXT, pady=16).pack()
+                 font=F_H1, bg=BG, fg=TEXT, pady=20).pack()
         self._step_lbl = tk.Label(center, text=SCAN_STEPS[0],
-                                   font=("JetBrains Mono", 9),
-                                   bg=BG, fg=TMUT, wraplength=340)
+                                   font=(MONO, 9),
+                                   bg=BG, fg=TMUT, wraplength=360)
         self._step_lbl.pack()
 
     # ── Comet-trail spinner ───────────────────────────────────────────────────
@@ -357,17 +369,17 @@ class ResultFrame(tk.Frame):
         dmi = r.get("dmi", {})
 
         def sec(title: str):
-            tk.Label(p, text=title, font=("Inter", 9, "bold"),
+            tk.Label(p, text=title.upper(), font=F_SECTION,
                      bg=BG, fg=TMUT, anchor="w"
-                     ).pack(fill="x", padx=20, pady=(20, 5))
-            tk.Frame(p, bg=BORDER, height=1).pack(fill="x", padx=20)
+                     ).pack(fill="x", padx=28, pady=(26, 8))
+            tk.Frame(p, bg=BORDER, height=1).pack(fill="x", padx=28)
 
         def row(label: str, value: str, mono=False):
             f = tk.Frame(p, bg=BG)
-            f.pack(fill="x", padx=20, pady=2)
-            tk.Label(f, text=label, font=("Inter", 10),
-                     bg=BG, fg=TSEC, width=18, anchor="w").pack(side="left")
-            fnt = ("JetBrains Mono", 10) if mono else ("Inter", 10)
+            f.pack(fill="x", padx=28, pady=3)
+            tk.Label(f, text=label, font=F_BODY,
+                     bg=BG, fg=TSEC, width=16, anchor="w").pack(side="left")
+            fnt = (MONO, 10) if mono else F_BODY
             tk.Label(f, text=str(value), font=fnt,
                      bg=BG, fg=TEXT, anchor="w").pack(side="left", fill="x", expand=True)
 
@@ -413,20 +425,26 @@ class ResultFrame(tk.Frame):
         row("CPU Vulns",  f"{len(bad)} unmitigated / {len(vulns)} total")
 
         # Continuous monitoring — countdown to the next automatic scan
-        tk.Frame(p, bg=BG, height=12).pack()
+        tk.Frame(p, bg=BG, height=18).pack()
         mon = tk.Frame(p, bg=CARD, highlightbackground=BORDA, highlightthickness=1)
-        mon.pack(padx=20, pady=(0, 10), fill="x")
+        mon.pack(padx=28, pady=(0, 16), fill="x")
         mrow = tk.Frame(mon, bg=CARD)
-        mrow.pack(padx=14, pady=10, fill="x")
-        tk.Label(mrow, text="● Continuous monitoring", font=("Inter", 9),
-                 bg=CARD, fg=OK).pack(side="left")
+        mrow.pack(padx=16, pady=12, fill="x")
+        _dot(mrow, OK).pack(side="left", padx=(0, 8))
+        tk.Label(mrow, text="Continuous monitoring", font=F_SMALL,
+                 bg=CARD, fg=TSEC).pack(side="left")
         self._countdown_lbl = tk.Label(mrow, text="Next scan in 5:00",
-                                       font=("JetBrains Mono", 9), bg=CARD, fg=ACCENT)
+                                       font=(MONO, 9), bg=CARD, fg=ACCENT)
         self._countdown_lbl.pack(side="right")
 
-        Btn(p, "Scan Now",
-            lambda: self.master._switch(ScanFrame, self._email)
-        ).pack(padx=20, pady=(0, 24), fill="x")
+        Btn(p, "Scan Network", self._open_network).pack(
+            padx=28, pady=(0, 10), fill="x")
+        GhostBtn(p, "Scan System Now",
+                 lambda: self.master._switch(ScanFrame, self._email)
+                 ).pack(padx=28, pady=(0, 28), fill="x")
+
+    def _open_network(self):
+        self.master._switch(NetworkFrame, self._email)
 
     def _tick_countdown(self):
         if not self.winfo_exists() or not self._countdown_lbl.winfo_exists():
@@ -440,6 +458,194 @@ class ResultFrame(tk.Frame):
         self.after(1000, self._tick_countdown)
 
 
+# ── Network discovery frame ─────────────────────────────────────────────────────
+
+class NetworkFrame(tk.Frame):
+    """Discovers devices on the local network, then lists them and syncs them."""
+
+    def __init__(self, master: App, email: str):
+        super().__init__(master, bg=BG)
+        self._email   = email
+        self._angle   = 0.0
+        self._running = True
+        self._devices: list = []
+        self._summary: dict = {}
+        self._error: str | None = None
+        self._build_scanning()
+        self._spin()
+        threading.Thread(target=self._run, daemon=True).start()
+
+    # ── Scanning view ──────────────────────────────────────────────────────────
+
+    def _build_scanning(self):
+        _topbar(self, subtitle="Network discovery")
+        center = tk.Frame(self, bg=BG)
+        center.place(relx=0.5, rely=0.5, anchor="center")
+
+        self._cv = tk.Canvas(center, width=96, height=96,
+                             bg=BG, highlightthickness=0)
+        self._cv.pack()
+        tk.Label(center, text="Scanning local network",
+                 font=F_H1, bg=BG, fg=TEXT, pady=20).pack()
+        self._step_lbl = tk.Label(
+            center, text="Detecting subnet…", font=(MONO, 9),
+            bg=BG, fg=TMUT, wraplength=360)
+        self._step_lbl.pack()
+
+    def _spin(self):
+        if not self._running or not self.winfo_exists() or not self._cv.winfo_exists():
+            return
+        self._angle = (self._angle + 6) % 360
+        self._cv.delete("all")
+        cx = cy = 48
+        R, n = 34, 14
+        for i in range(n):
+            a = math.radians(self._angle + i * (360 / n))
+            x = cx + R * math.cos(a)
+            y = cy + R * math.sin(a)
+            t = i / n
+            c = _lerp("#1e2235", ACCENT, t)
+            s = 2.5 + 4 * t
+            self._cv.create_oval(x-s/2, y-s/2, x+s/2, y+s/2, fill=c, outline="")
+        self.after(35, self._spin)
+
+    def _set_step(self, text: str):
+        if self.winfo_exists() and self._step_lbl.winfo_exists():
+            self._step_lbl.config(text=text)
+
+    # ── Worker thread ──────────────────────────────────────────────────────────
+
+    def _run(self):
+        try:
+            self.after(0, lambda: self._set_step("Detecting subnet…"))
+            subnet = _nd.detect_subnet()
+            self.after(0, lambda: self._set_step(
+                f"Discovering hosts on {subnet or 'local network'}…"))
+            devices = _nd.discover(subnet)
+            self._devices = devices
+
+            self.after(0, lambda: self._set_step("Syncing to cloud…"))
+            token, uid = self.master._creds
+            self._summary = _nd.save_devices(token, uid, devices)
+        except Exception as e:  # never crash the GUI
+            self._error = str(e)
+        self._running = False
+        self.after(0, self._show_results)
+
+    # ── Results view ───────────────────────────────────────────────────────────
+
+    def _show_results(self):
+        for w in self.winfo_children():
+            w.destroy()
+
+        bar = _topbar(self, subtitle=self._email)
+        inner = bar.winfo_children()[0]
+        if self._summary and not self._error:
+            n = self._summary.get("created", 0) + self._summary.get("updated", 0)
+            tk.Label(inner, text="✓ Synced", font=F_SMALL,
+                     bg=PANEL, fg=OK).pack(side="right", padx=(0, 8))
+
+        # Header row
+        head = tk.Frame(self, bg=BG)
+        head.pack(fill="x", padx=28, pady=(20, 4))
+        tk.Label(head, text="Network Devices", font=F_H1,
+                 bg=BG, fg=TEXT).pack(side="left")
+        tk.Label(head, text=f"{len(self._devices)} found", font=F_SMALL,
+                 bg=BG, fg=TSEC).pack(side="right")
+
+        if self._summary:
+            s = self._summary
+            sub = (f"{s.get('created',0)} new · {s.get('updated',0)} updated"
+                   + (f" · {s['failed']} failed" if s.get("failed") else ""))
+            tk.Label(self, text=sub, font=F_SMALL, bg=BG, fg=TMUT,
+                     anchor="w").pack(fill="x", padx=28, pady=(0, 6))
+
+        tk.Frame(self, bg=BORDER, height=1).pack(fill="x", padx=28, pady=(0, 4))
+
+        # Scrollable device list
+        wrap = tk.Frame(self, bg=BG)
+        wrap.pack(fill="both", expand=True)
+        scroll = tk.Scrollbar(wrap, orient="vertical")
+        scroll.pack(side="right", fill="y")
+        cv = tk.Canvas(wrap, bg=BG, highlightthickness=0, yscrollcommand=scroll.set)
+        cv.pack(fill="both", expand=True)
+        scroll.config(command=cv.yview)
+        content = tk.Frame(cv, bg=BG)
+        win = cv.create_window((0, 0), window=content, anchor="nw")
+        cv.bind("<Configure>", lambda e: cv.itemconfig(win, width=e.width))
+        content.bind("<Configure>",
+                     lambda e: cv.configure(scrollregion=cv.bbox("all")))
+        for seq in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+            cv.bind_all(seq, lambda e, c=cv: c.yview_scroll(
+                -1 if e.num == 4 or getattr(e, "delta", 0) > 0 else 1, "units"))
+
+        if self._error:
+            tk.Label(content, text=f"Discovery failed: {self._error}",
+                     font=F_SMALL, bg=BG, fg=ERR, wraplength=420,
+                     justify="left").pack(padx=28, pady=20, anchor="w")
+        elif not self._devices:
+            tk.Label(content,
+                     text="No devices discovered. nmap host discovery on a LAN "
+                          "may require elevated privileges to report MAC "
+                          "addresses and vendors.",
+                     font=F_SMALL, bg=BG, fg=TSEC, wraplength=420,
+                     justify="left").pack(padx=28, pady=20, anchor="w")
+        else:
+            for d in self._devices:
+                self._device_card(content, d)
+
+        # Footer buttons
+        foot = tk.Frame(self, bg=PANEL, highlightbackground=BORDER,
+                        highlightthickness=0)
+        foot.pack(fill="x", side="bottom")
+        tk.Frame(foot, bg=BORDER, height=1).pack(fill="x")
+        fin = tk.Frame(foot, bg=PANEL)
+        fin.pack(fill="x", padx=28, pady=14)
+        Btn(fin, "Rescan Network",
+            lambda: self.master._switch(NetworkFrame, self._email)
+            ).pack(fill="x", pady=(0, 8))
+        GhostBtn(fin, "Back to System Scan",
+                 lambda: self.master._switch(ScanFrame, self._email)
+                 ).pack(fill="x")
+
+    def _device_card(self, parent, d: dict):
+        card = tk.Frame(parent, bg=CARD,
+                        highlightbackground=BORDER, highlightthickness=1)
+        card.pack(fill="x", padx=28, pady=6)
+        inn = tk.Frame(card, bg=CARD)
+        inn.pack(fill="x", padx=16, pady=12)
+
+        top = tk.Frame(inn, bg=CARD)
+        top.pack(fill="x")
+        tk.Label(top, text=d.get("ip", "?"), font=(MONO, 11, "bold"),
+                 bg=CARD, fg=ACCENT).pack(side="left")
+        dtype = d.get("device_type", "Unknown")
+        chip = tk.Frame(top, bg=PANEL, highlightbackground=BORDA,
+                        highlightthickness=1)
+        chip.pack(side="right")
+        tk.Label(chip, text=f" {dtype} ", font=F_SMALL,
+                 bg=PANEL, fg=TSEC, pady=2).pack()
+
+        hostname = d.get("hostname") or "—"
+        tk.Label(inn, text=hostname, font=F_BODY, bg=CARD, fg=TEXT,
+                 anchor="w").pack(fill="x", pady=(8, 2))
+
+        meta = tk.Frame(inn, bg=CARD)
+        meta.pack(fill="x")
+
+        def _kv(label, value):
+            r = tk.Frame(meta, bg=CARD)
+            r.pack(fill="x", pady=1)
+            tk.Label(r, text=label, font=F_SMALL, bg=CARD, fg=TMUT,
+                     width=9, anchor="w").pack(side="left")
+            tk.Label(r, text=value or "—", font=(MONO, 9), bg=CARD,
+                     fg=TSEC, anchor="w").pack(side="left", fill="x", expand=True)
+
+        _kv("MAC", d.get("mac"))
+        _kv("Vendor", d.get("vendor"))
+        _kv("OS", d.get("os_guess"))
+
+
 # ── Shared top-bar ────────────────────────────────────────────────────────────
 
 def _topbar(parent: tk.Frame, subtitle: str = "") -> tk.Frame:
@@ -447,7 +653,7 @@ def _topbar(parent: tk.Frame, subtitle: str = "") -> tk.Frame:
     bar = tk.Frame(parent, bg=PANEL, highlightbackground=BORDER, highlightthickness=0)
     bar.pack(fill="x")
     inner = tk.Frame(bar, bg=PANEL)
-    inner.pack(fill="x", padx=16, pady=10)
+    inner.pack(fill="x", padx=20, pady=14)
 
     left = tk.Frame(inner, bg=PANEL)
     left.pack(side="left", fill="x", expand=True)
@@ -455,14 +661,16 @@ def _topbar(parent: tk.Frame, subtitle: str = "") -> tk.Frame:
     if logo:
         lg = tk.Label(left, image=logo, bg=PANEL)
         lg.image = logo
-        lg.pack(side="left", padx=(0, 8))
-    tk.Label(left, text="Scan Oasis", font=("Inter", 12, "bold"),
+        lg.pack(side="left", padx=(0, 10))
+    tk.Label(left, text="Scan Oasis", font=F_H2,
              bg=PANEL, fg=TEXT).pack(side="left")
     if subtitle:
-        tk.Label(left, text=subtitle, font=("Inter", 9),
-                 bg=PANEL, fg=TSEC, padx=10).pack(side="left")
+        tk.Label(left, text="·", font=F_H2, bg=PANEL, fg=TMUT,
+                 padx=8).pack(side="left")
+        tk.Label(left, text=subtitle, font=F_SMALL,
+                 bg=PANEL, fg=TSEC).pack(side="left")
 
-    close = tk.Button(inner, text="✕", font=("Inter", 11),
+    close = tk.Button(inner, text="✕", font=(FONT, 12),
                       bg=PANEL, fg=TMUT, activebackground=PANEL,
                       activeforeground=ERR, relief="flat", bd=0,
                       cursor="hand2", padx=4,
@@ -486,13 +694,22 @@ class Entry(tk.Frame):
         self._e   = tk.Entry(
             self, textvariable=self._var,
             bg=CARD, fg=TMUT, insertbackground=ACCENT,
-            relief="flat", font=("Inter", 11), bd=8, show=show or "")
+            relief="flat", font=(FONT, 11), bd=10, show=show or "")
         self._e.pack(fill="x")
+        # Accent the hairline border on focus for a refined input feel.
+        self._e.bind("<FocusIn>",  self._focus_in, add="+")
+        self._e.bind("<FocusOut>", self._focus_out, add="+")
         if placeholder and not show:
             self._e.insert(0, placeholder)
             self._e.bind("<FocusIn>",  self._in)
             self._e.bind("<FocusOut>", self._out)
             self._e.bind("<Key>",      self._key)
+
+    def _focus_in(self, _):
+        self.config(highlightbackground=ACCENT, highlightcolor=ACCENT)
+
+    def _focus_out(self, _):
+        self.config(highlightbackground=BORDA, highlightcolor=BORDA)
 
     def _in(self, _):
         if self._var.get() == self._ph:
@@ -514,13 +731,63 @@ class Entry(tk.Frame):
 
 
 class Btn(tk.Button):
+    """Primary, accent-filled call-to-action button."""
+
     def __init__(self, parent, text: str, command):
         super().__init__(
             parent, text=text, command=command,
             bg=ACCENT, fg="#000000",
-            activebackground="#33ddff", activeforeground="#000000",
-            relief="flat", font=("Inter", 11, "bold"),
-            pady=10, cursor="hand2", bd=0)
+            activebackground=ACCENT_HI, activeforeground="#000000",
+            relief="flat", font=(FONT, 11, "bold"),
+            pady=11, cursor="hand2", bd=0,
+            highlightthickness=0)
+
+
+class GhostBtn(tk.Button):
+    """Secondary, outlined button — hairline border, hover-lit text."""
+
+    def __init__(self, parent, text: str, command):
+        super().__init__(
+            parent, text=text, command=command,
+            bg=PANEL, fg=TSEC,
+            activebackground=HOVER, activeforeground=TEXT,
+            relief="flat", font=(FONT, 11, "bold"),
+            pady=10, cursor="hand2", bd=0,
+            highlightbackground=BORDA, highlightthickness=1)
+        self.bind("<Enter>", lambda _: self.config(fg=TEXT, bg=HOVER))
+        self.bind("<Leave>", lambda _: self.config(fg=TSEC, bg=PANEL))
+
+
+def _dot(parent, color: str, size: int = 8) -> tk.Canvas:
+    """A small filled status dot drawn on a canvas (no emoji)."""
+    pad = 4
+    cv = tk.Canvas(parent, width=size + pad, height=size + pad,
+                   bg=parent.cget("bg"), highlightthickness=0)
+    cv.create_oval(pad / 2, pad / 2, pad / 2 + size, pad / 2 + size,
+                   fill=color, outline="")
+    return cv
+
+
+def _glyph(parent, kind: str, size: int, color: str, bg: str) -> tk.Canvas:
+    """Minimal monochrome vector glyph (currently: a shield) — no emoji."""
+    cv = tk.Canvas(parent, width=size, height=size, bg=bg, highlightthickness=0)
+    if kind == "shield":
+        w = size
+        m = size * 0.12
+        pts = [
+            w / 2, m,
+            w - m, m + size * 0.12,
+            w - m, size * 0.55,
+            w / 2, w - m,
+            m, size * 0.55,
+            m, m + size * 0.12,
+        ]
+        cv.create_polygon(pts, outline=color, fill="", width=2,
+                          joinstyle="round")
+        cv.create_line(w * 0.34, size * 0.5, w * 0.46, size * 0.62,
+                       w * 0.66, size * 0.38, fill=color, width=2,
+                       capstyle="round", joinstyle="round")
+    return cv
 
 
 # ── Utilities ─────────────────────────────────────────────────────────────────
