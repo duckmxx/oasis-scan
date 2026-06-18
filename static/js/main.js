@@ -1307,9 +1307,14 @@ function renderPatches() {
     const chips = g.cves.map(c => {
       const ty = cveType(c);
       const info = _CVE_TYPE_INFO[ty];
-      return `<span class="patch-cve-chip">
+      // The whole chip redirects to this CVE in the CVEs tab (scrolls + expands it).
+      return `<span class="patch-cve-chip" role="button" tabindex="0" style="cursor:pointer"
+        title="View ${escapeHtml(c.id)} in CVEs"
+        onclick="window.__gotoCVE('${escapeHtml(c.id)}')"
+        onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();window.__gotoCVE('${escapeHtml(c.id)}')}">
         <span class="badge badge-${c.severity}" style="padding:0 5px">${c.severity[0].toUpperCase()}</span>
         ${escapeHtml(c.id)}${info ? ` · <span style="opacity:.8">${info.label}</span>` : ''}
+        <span style="color:var(--accent);font-size:10px;margin-left:2px">↗</span>
       </span>`;
     }).join('');
     return `
